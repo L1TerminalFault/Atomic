@@ -2,8 +2,10 @@
 #define SHAPE_ROUNDED_RECT 0
 #define SHAPE_CIRCLE 1
 #define SHAPE_TEXT 2
+#define SHAPE_IMAGE 3
 
-layout(binding = 1) uniform sampler2D fontAtlas; // Bound to descriptor layout slot 1
+layout(binding = 1) uniform sampler2D fontAtlas; 
+layout(binding = 2) uniform sampler2D uiTexture[16];
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inUV;
@@ -18,6 +20,7 @@ layout(location = 8) in float inDotSize;
 layout(location = 9) flat in uint inStrokePos;
 layout(location = 10) in vec2 inUVMin;
 layout(location = 11) in vec2 inUVMax;
+layout(location = 12) flat in uint inTextureIndex;
 
 layout(location = 0) out vec4 fColor;
 
@@ -29,22 +32,24 @@ float roundedBoxSDF(vec2 p, vec2 b, vec4 r){
 }
 
 void main(){
-  // Handle text execution rendering branch early
   if (inShapeType == SHAPE_TEXT) {
-    // Interpolate the exact sub-pixel atlas region for this glyph
     vec2 texCoord = mix(inUVMin, inUVMax, inUV);
     
-    // Sample the raw R8 single-channel texture map mask
     float mask = texture(fontAtlas, texCoord).r;
     
-    // Simple alpha mask evaluation test
     if (mask < 0.01) discard;
     
     fColor = vec4(inColor.rgb, inColor.a * mask);
     return;
   }
 
-  // Vector Primitives Math Pass (Rectangles & Circles)
+  if(inShapeType == SHAPE_IMAGE){
+    vec2 texCoord = mix(inUVMin, inUVMax, inUV);
+    vec4 texColor = texture(uiTexture[inTextureIndex], texCoord);
+    fColor = texColor * inColor;
+    return;
+  }
+
   vec2 center = inSize * 0.5;
   vec2 p = (inUV * inSize) - center;
 

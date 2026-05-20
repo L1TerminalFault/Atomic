@@ -65,4 +65,34 @@ void VulkanRenderer::add_text(float x, float y, const std::string &text,
   }
 }
 
+void VulkanRenderer::add_image(float x, float y, float w, float h,
+                               const std::string &path,
+                               ui::styleConfig *style) {
+  uint32_t textureId = get_or_create_texture(path);
+
+  UIInstance instance{};
+  instance.pos = {x, y};
+  instance.size = {w, h};
+  instance.color =
+      style ? style->color : math::vec4<float>{1.0f, 1.0f, 1.0f, 1.0f};
+  instance.radius =
+      style ? style->radius : math::vec4<float>{0.0f, 0.0f, 0.0f, 0.0f};
+
+  instance.shapeType = 3; // SHAPE_IMAGE
+  instance.textureIndex = textureId;
+
+  instance.uvMin = {0.0f, 0.0f};
+  instance.uvMax = {1.0f, 1.0f};
+
+  // Safe configurations for optional borders on the canvas layout
+  instance.strokeWidth = style ? style->strokeWidth : 0.0f;
+  instance.strokeColor =
+      style ? style->strokeColor : math::vec4<float>{0.0f, 0.0f, 0.0f, 0.0f};
+  instance.strokePosition = style ? style->strokePosition : 0;
+  instance.dotGap = style ? style->dotGap : 0.0f;
+  instance.dotSize = style ? style->dotSize : 0.0f;
+
+  m_ui_queue.push_back(instance);
+}
+
 } // namespace ui

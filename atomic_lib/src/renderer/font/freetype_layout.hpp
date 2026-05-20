@@ -3,7 +3,6 @@
 #include "renderer/font/interface.hpp"
 #include <cstddef>
 #include <cstdint>
-#include <sstream>
 #include <vector>
 
 namespace ui::font {

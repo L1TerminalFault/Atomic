@@ -1,5 +1,6 @@
 #include "vulkan_renderer.hpp"
 #include "math/vec.hpp"
+#include "renderer/font/freetype_font.hpp"
 #include "renderer/font/interface.hpp"
 #include "renderer/style.hpp"
 #include "renderer/vulkan/vulkan_shader.hpp"
@@ -10,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <vulkan/vulkan.h>
@@ -487,6 +489,15 @@ void VulkanRenderer::begin_frame() {
       400.0f, 100.0f, 30.0f,
       &circleStyle); // x=400, y=100, radius=30 (will draw 60x60 bounding box)
 
+  // image test
+  ui::styleConfig imageStyle{};
+  imageStyle.color = {1.0f, 1.0f, 1.0f, 1.0f}; // Clear tint
+  imageStyle.radius = {12.0f, 12.0f, 12.0f,
+                       12.0f}; // Rounded borders match up perfectly
+  imageStyle.shape = ShapeType::Image;
+
+  add_image(100.0f, 150.0f, 300.0f, 200.0f, "test.jpg", &imageStyle);
+
   if (m_default_font) {
     ui::styleConfig textStyle{};
     textStyle.font = m_default_font;
@@ -579,8 +590,17 @@ void VulkanRenderer::create_descriptor_set_layout() {
   samplerLayoutBinding.descriptorCount = 1;
   samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-  std::array<VkDescriptorSetLayoutBinding, 2> bindings = {layoutBinding,
-                                                          samplerLayoutBinding};
+  VkDescriptorSetLayoutBinding samplerLayoutBindingPic{};
+  samplerLayoutBindingPic.binding = 2;
+  samplerLayoutBindingPic.descriptorCount =
+      16; // Match the array size in the shader
+  samplerLayoutBindingPic.descriptorType =
+      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  samplerLayoutBindingPic.pImmutableSamplers = nullptr;
+  samplerLayoutBindingPic.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+  std::array<VkDescriptorSetLayoutBinding, 3> bindings = {
+      layoutBinding, samplerLayoutBinding, samplerLayoutBindingPic};
 
   VkDescriptorSetLayoutCreateInfo layoutInfo{
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -599,7 +619,7 @@ void VulkanRenderer::create_descriptor_pool() {
   poolSizes[0].descriptorCount = 1;
 
   poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  poolSizes[1].descriptorCount = 1;
+  poolSizes[1].descriptorCount = 1 + 16;
 
   VkDescriptorPoolCreateInfo poolInfo{
       VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -625,57 +645,36 @@ void VulkanRenderer::create_descriptor_set() {
     throw std::runtime_error("failed to allocate descriptor sets!");
   }
 
-  // 1. Prepare the instance queue data buffer write description (Always valid)
   VkDescriptorBufferInfo bufferInfo{};
   bufferInfo.buffer = m_storageBuffer;
   bufferInfo.offset = 0;
   bufferInfo.range = VK_WHOLE_SIZE;
 
   VkWriteDescriptorSet bufferWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+  bufferWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
   bufferWrite.dstSet = m_descriptorSet;
   bufferWrite.dstBinding = 0;
   bufferWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
   bufferWrite.descriptorCount = 1;
   bufferWrite.pBufferInfo = &bufferInfo;
 
-  std::vector<VkWriteDescriptorSet> descriptorWrites = {bufferWrite};
+  // Execute the initial storage buffer binding update pass
+  vkUpdateDescriptorSets(m_device, 1, &bufferWrite, 0, nullptr);
 
-  // 2. ONLY configure and push the image sampler write if handles are
-  // allocated!
-  VkDescriptorImageInfo imageInfo{};
-  VkWriteDescriptorSet samplerWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-
-  if (m_fontAtlasImageView != VK_NULL_HANDLE &&
-      m_fontAtlasSampler != VK_NULL_HANDLE) {
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfo.imageView = m_fontAtlasImageView;
-    imageInfo.sampler = m_fontAtlasSampler;
-
-    samplerWrite.dstSet = m_descriptorSet;
-    samplerWrite.dstBinding = 1;
-    samplerWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerWrite.descriptorCount = 1;
-    samplerWrite.pImageInfo = &imageInfo;
-
-    descriptorWrites.push_back(samplerWrite);
-  }
-
-  // Execute the update pass with whatever configuration is safe right now
-  vkUpdateDescriptorSets(m_device,
-                         static_cast<uint32_t>(descriptorWrites.size()),
-                         descriptorWrites.data(), 0, nullptr);
+  // Note: binding = 1 (fontAtlas) and binding = 2 (uiTexture[16]) are left
 }
+
 void VulkanRenderer::render_batch() {
   if (m_ui_queue.empty())
     return;
+
+  // Track if we need to write changes to descriptor sets this frame
+  bool fontAtlasChanged = false;
 
   if (m_default_font) {
     auto *concreteFont = static_cast<ui::font::FreeTypeFont *>(m_default_font);
 
     if (concreteFont->consumeTextureDirtyBit()) {
-      // Query properties straight from your abstraction layer
-      // If m_atlasPixels is private, verify your accessor name (e.g.,
-      // m_atlasPixels.data() or getRawPixels())
       const uint8_t *pixels = concreteFont->getRawPixels();
       uint32_t width = 1024; // Matches your FreeTypeFont defaults
       uint32_t height = 1024;
@@ -684,28 +683,66 @@ void VulkanRenderer::render_batch() {
       // memory handles
       create_texture_resource(pixels, width, height);
 
-      // Instantly update descriptor binding 1 so the sampler can read the new
-      // image view
-      VkDescriptorImageInfo imageInfo{};
-      imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-      imageInfo.imageView = m_fontAtlasImageView;
-      imageInfo.sampler = m_fontAtlasSampler;
-
-      VkWriteDescriptorSet samplerWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-      samplerWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-      samplerWrite.dstSet = m_descriptorSet;
-      samplerWrite.dstBinding = 1;
-      samplerWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-      samplerWrite.descriptorCount = 1;
-      samplerWrite.pImageInfo = &imageInfo;
-
-      vkUpdateDescriptorSets(m_device, 1, &samplerWrite, 0, nullptr);
+      fontAtlasChanged = true;
     }
   }
 
+  // --- BINDING 1 UPDATE: Font Atlas Single Sampler ---
+  if (fontAtlasChanged && m_fontAtlasImageView != VK_NULL_HANDLE) {
+    VkDescriptorImageInfo fontImageInfo{};
+    fontImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    fontImageInfo.imageView = m_fontAtlasImageView;
+    fontImageInfo.sampler = m_fontAtlasSampler;
+
+    VkWriteDescriptorSet fontSamplerWrite{
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    fontSamplerWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    fontSamplerWrite.dstSet = m_descriptorSet;
+    fontSamplerWrite.dstBinding = 1; // Explicitly targets binding = 1
+    fontSamplerWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    fontSamplerWrite.descriptorCount = 1;
+    fontSamplerWrite.pImageInfo = &fontImageInfo;
+
+    vkUpdateDescriptorSets(m_device, 1, &fontSamplerWrite, 0, nullptr);
+  }
+
+  // --- BINDING 2 UPDATE: Disk Image Sampler Array ---
+  // Run this if a new image was added, OR if the font atlas just loaded (since
+  // it's our fallback view)
+  if ((m_descriptorDirty || fontAtlasChanged) &&
+      m_fontAtlasImageView != VK_NULL_HANDLE) {
+    std::vector<VkDescriptorImageInfo> imageInfos(16);
+    for (size_t i = 0; i < 16; ++i) {
+      imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      imageInfos[i].sampler =
+          m_fontAtlasSampler; // Share the UI filtering sampler properties
+
+      // Fill slots with loaded textures, or fall back to font view to prevent
+      // validation layers from complaining
+      if (i < m_textureViews.size()) {
+        imageInfos[i].imageView = m_textureViews[i];
+      } else {
+        imageInfos[i].imageView = m_fontAtlasImageView;
+      }
+    }
+
+    VkWriteDescriptorSet arrayWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    arrayWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    arrayWrite.dstSet = m_descriptorSet;
+    arrayWrite.dstBinding = 2; // Explicitly targets binding = 2 layout array
+    arrayWrite.dstArrayElement = 0;
+    arrayWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    arrayWrite.descriptorCount = 16;
+    arrayWrite.pImageInfo = imageInfos.data();
+
+    vkUpdateDescriptorSets(m_device, 1, &arrayWrite, 0, nullptr);
+
+    // Only turn off the dirty flag when the update is safely submitted!
+    m_descriptorDirty = false;
+  }
+
+  // --- CORE HOST DATA STORAGE STREAM AND DRAW COMMAND SEQUENCE ---
   void *data;
-  // since this is done every frame maybe mapping ones at the start of app and
-  // unmapping at end might be better
   vkMapMemory(m_device, m_storageBufferMemory, 0,
               m_ui_queue.size() * sizeof(UIInstance), 0, &data);
   memcpy(data, m_ui_queue.data(), m_ui_queue.size() * sizeof(UIInstance));
@@ -1108,4 +1145,199 @@ void VulkanRenderer::create_texture_resource(const uint8_t *pixels,
     throw std::runtime_error("failed to create font atlas sampler!");
   }
 }
+
+uint32_t VulkanRenderer::get_or_create_texture(const std::string &path) {
+  if (!m_asset_loader) {
+    throw std::runtime_error("[VulkanRenderer] No asset loader attached!");
+  }
+
+  auto it = m_imagePathToIdCache.find(path);
+  if (it != m_imagePathToIdCache.end()) {
+    return it->second;
+  }
+
+  auto image_data = m_asset_loader->load<ui::asset::ImageAsset>(path);
+  if (!image_data) {
+    std::cerr << "[Vulkan] Failed to load image from path: " << path
+              << std::endl;
+    return 0; // Fallback to index 0
+  }
+
+  VkDeviceSize imageSize =
+      image_data->width * image_data->height * 4; // 4 channels (RGBA)
+
+  VkBuffer stagingBuffer;
+  VkDeviceMemory stagingBufferMemory;
+
+  VkBufferCreateInfo bufferInfo{};
+  bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bufferInfo.size = imageSize;
+  bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+  if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &stagingBuffer) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to create image staging buffer!");
+  }
+
+  VkMemoryRequirements memRequirements;
+  vkGetBufferMemoryRequirements(m_device, stagingBuffer, &memRequirements);
+
+  VkMemoryAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocInfo.allocationSize = memRequirements.size;
+  allocInfo.memoryTypeIndex = findMemoryType(
+      memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+  if (vkAllocateMemory(m_device, &allocInfo, nullptr, &stagingBufferMemory) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to allocate image staging buffer memory!");
+  }
+
+  vkBindBufferMemory(m_device, stagingBuffer, stagingBufferMemory, 0);
+
+  void *mappedData;
+  vkMapMemory(m_device, stagingBufferMemory, 0, imageSize, 0, &mappedData);
+  std::memcpy(mappedData, image_data->pixels.data(),
+              static_cast<size_t>(imageSize));
+  vkUnmapMemory(m_device, stagingBufferMemory);
+
+  VkImage newImage;
+  VkDeviceMemory newMemory;
+  VkImageView newView;
+
+  VkImageCreateInfo imageInfo{};
+  imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  imageInfo.imageType = VK_IMAGE_TYPE_2D;
+  imageInfo.extent.width = image_data->width;
+  imageInfo.extent.height = image_data->height;
+  imageInfo.extent.depth = 1;
+  imageInfo.mipLevels = 1;
+  imageInfo.arrayLayers = 1;
+  imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+  imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+  imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  imageInfo.usage =
+      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+
+  if (vkCreateImage(m_device, &imageInfo, nullptr, &newImage) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create graphics texture image!");
+  }
+
+  vkGetImageMemoryRequirements(m_device, newImage, &memRequirements);
+
+  allocInfo.allocationSize = memRequirements.size;
+  allocInfo.memoryTypeIndex = findMemoryType(
+      memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+  if (vkAllocateMemory(m_device, &allocInfo, nullptr, &newMemory) !=
+      VK_SUCCESS) {
+    throw std::runtime_error(
+        "failed to allocate graphics texture image memory!");
+  }
+
+  vkBindImageMemory(m_device, newImage, newMemory, 0);
+
+  // Allocate a transient command buffer from your existing pool for transfer
+  // operations
+  VkCommandBufferAllocateInfo cmdAllocInfo{};
+  cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  cmdAllocInfo.commandPool = m_commandPool;
+  cmdAllocInfo.commandBufferCount = 1;
+
+  VkCommandBuffer tempCmdBuffer;
+  vkAllocateCommandBuffers(m_device, &cmdAllocInfo, &tempCmdBuffer);
+
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(tempCmdBuffer, &beginInfo);
+
+  VkImageMemoryBarrier barrier{};
+  barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.image = newImage;
+  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  barrier.subresourceRange.baseMipLevel = 0;
+  barrier.subresourceRange.levelCount = 1;
+  barrier.subresourceRange.baseArrayLayer = 0;
+  barrier.subresourceRange.layerCount = 1;
+  barrier.srcAccessMask = 0;
+  barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+  vkCmdPipelineBarrier(tempCmdBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &barrier);
+
+  VkBufferImageCopy region{};
+  region.bufferOffset = 0;
+  region.bufferRowLength = 0;
+  region.bufferImageHeight = 0;
+  region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  region.imageSubresource.mipLevel = 0;
+  region.imageSubresource.baseArrayLayer = 0;
+  region.imageSubresource.layerCount = 1;
+  region.imageOffset = {0, 0, 0};
+  region.imageExtent = {image_data->width, image_data->height, 1};
+
+  vkCmdCopyBufferToImage(tempCmdBuffer, stagingBuffer, newImage,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+  barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+  vkCmdPipelineBarrier(tempCmdBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &barrier);
+
+  vkEndCommandBuffer(tempCmdBuffer);
+
+  VkSubmitInfo submitInfo{};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submitInfo.commandBufferCount = 1;
+  submitInfo.pCommandBuffers = &tempCmdBuffer;
+
+  vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+  vkQueueWaitIdle(m_graphicsQueue);
+
+  vkFreeCommandBuffers(m_device, m_commandPool, 1, &tempCmdBuffer);
+  vkDestroyBuffer(m_device, stagingBuffer, nullptr);
+  vkFreeMemory(m_device, stagingBufferMemory, nullptr);
+
+  VkImageViewCreateInfo viewInfo{};
+  viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  viewInfo.image = newImage;
+  viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+  viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  viewInfo.subresourceRange.baseMipLevel = 0;
+  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.baseArrayLayer = 0;
+  viewInfo.subresourceRange.layerCount = 1;
+
+  if (vkCreateImageView(m_device, &viewInfo, nullptr, &newView) != VK_SUCCESS) {
+    throw std::runtime_error(
+        "failed to create image view for loaded texture asset!");
+  }
+
+  m_textureImages.push_back(newImage);
+  m_textureMemories.push_back(newMemory);
+  m_textureViews.push_back(newView);
+
+  uint32_t textureId = static_cast<uint32_t>(m_textureViews.size() - 1);
+  m_imagePathToIdCache[path] = textureId;
+  m_descriptorDirty = true;
+
+  return textureId;
+}
+
 } // namespace ui

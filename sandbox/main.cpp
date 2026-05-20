@@ -1,3 +1,4 @@
+#include "renderer/assetloader/image/stb/stb_impl.hpp"
 #include "renderer/font/freetype_font.hpp"
 #include "renderer/vulkan/vulkan_renderer.hpp"
 #include "windowing/interface.hpp"
@@ -27,6 +28,10 @@ int main() {
       delete myfont;
       throw std::runtime_error("coudnt find inter.ttf");
     }
+    auto assetLoader = std::make_unique<ui::asset::StbAssetLoader>();
+
+    // 2. Attach it to your engine context
+    renderer->set_asset_loader(assetLoader.get());
 
     renderer->set_default_font(myfont);
 

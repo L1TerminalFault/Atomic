@@ -1,7 +1,6 @@
 #pragma once
 
 #include "math/vec.hpp"
-#include "renderer/font/freetype_font.hpp"
 #include "renderer/font/interface.hpp"
 #include <cstdint>
 
@@ -11,6 +10,7 @@ enum class ShapeType : uint32_t {
   RoundedRect = 0,
   Circle = 1,
   Text = 2,
+  Image = 3
 };
 
 struct styleConfig {

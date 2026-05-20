@@ -1,8 +1,11 @@
 #pragma once
 
 #include "math/vec.hpp"
+#include "renderer/assetloader/interface.hpp"
 #include "renderer/interface.hpp"
 #include "renderer/style.hpp"
+#include <cstdint>
+#include <unordered_map>
 #include <vector>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
@@ -26,6 +29,8 @@ struct UIInstance {
   alignas(4) float dotGap;
   alignas(4) float dotSize;
 
+  alignas(4) uint32_t textureIndex;
+
   alignas(8) math::vec2<float> uvMin;
   alignas(8) math::vec2<float> uvMax;
   alignas(16) math::vec4<float> strokeColor;
@@ -44,6 +49,9 @@ public:
   void end_frame() override;
   void on_resize(int width, int height) override;
   void set_default_font(ui::font::Font *font) { m_default_font = font; }
+  void set_asset_loader(ui::asset::AssetLoader *loader) {
+    m_asset_loader = loader;
+  }
 
 private:
   void init_vulkan();
@@ -65,11 +73,15 @@ private:
 
   uint32_t findMemoryType(uint32_t typeFilter,
                           VkMemoryPropertyFlags properties);
+
   // -- drawing code --
   void add_rect(float x, float y, float w, float h, ui::styleConfig *style);
   void add_circle(float x, float y, float radius, ui::styleConfig *style);
   void add_text(float x, float y, const std::string &text,
                 ui::styleConfig *style);
+  void add_image(float x, float y, float w, float h, const std::string &path,
+                 ui::styleConfig *style = nullptr);
+
   // Font Atlas Resources
   VkImage m_fontAtlasImage = VK_NULL_HANDLE;
   VkDeviceMemory m_fontAtlasMemory = VK_NULL_HANDLE;
@@ -79,7 +91,19 @@ private:
       VK_NULL_HANDLE; // To sample pixels in your fragment shader
   void create_texture_resource(const uint8_t *pixels, uint32_t width,
                                uint32_t height);
-  // drawing codes --
+  // iamge texture tracking
+  std::vector<VkImage> m_textureImages;
+  std::vector<VkDeviceMemory> m_textureMemories;
+  std::vector<VkImageView> m_textureViews;
+
+  // small cache map to not always reload from disc
+  std::unordered_map<std::string, uint32_t> m_imagePathToIdCache;
+  VkSampler m_sharedSampler = VK_NULL_HANDLE;
+  bool m_descriptorDirty = false;
+  ui::asset::AssetLoader *m_asset_loader;
+  uint32_t get_or_create_texture(const std::string &path);
+
+  // shader loading utilities
   VkShaderModule createShaderModule(const std::vector<char> &code);
 
   class Window *m_window;
