@@ -53,12 +53,16 @@ public:
     m_asset_loader = loader;
   }
   // -- drawing code --
-  void add_rect(float x, float y, float w, float h, ui::styleConfig *style);
-  void add_circle(float x, float y, float radius, ui::styleConfig *style);
-  void add_text(float x, float y, const std::string &text,
-                ui::styleConfig *style);
-  void add_image(float x, float y, float w, float h, const std::string &path,
-                 ui::styleConfig *style = nullptr);
+  void add_rect(const math::vec2<float> &globalPosition,
+                const math::vec2<float> &computedSize,
+                const ui::styleConfig *style) override;
+  void add_circle(const math::vec2<float> &globalPosition, float radius,
+                  ui::styleConfig *style) override;
+  void add_text(const math::vec2<float> &globalPosition,
+                const std::string &text, const ui::styleConfig *style) override;
+  void add_image(const math::vec2<float> &globalPosition,
+                 const math::vec2<float> &computedSize, const std::string &path,
+                 const ui::styleConfig *style) override;
 
 private:
   void init_vulkan();
@@ -72,7 +76,7 @@ private:
   void create_pipeline_layout();
   void create_graphics_pipeline();
   void create_storage_buffer();
-  void render_batch();
+  void render_batch() override;
   void create_descriptor_set_layout();
   void create_descriptor_pool();
   void create_descriptor_set();

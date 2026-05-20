@@ -1,8 +1,6 @@
 #include "vulkan_renderer.hpp"
 #include "math/vec.hpp"
 #include "renderer/font/freetype_font.hpp"
-#include "renderer/font/interface.hpp"
-#include "renderer/style.hpp"
 #include "renderer/vulkan/vulkan_shader.hpp"
 #include "windowing/interface.hpp"
 #include <SDL3/SDL_video.h>
@@ -447,18 +445,18 @@ void VulkanRenderer::begin_frame() {
   vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
                         m_image_available_sem, VK_NULL_HANDLE,
                         &m_currentImageIndex);
+
   vkResetCommandBuffer(m_commandBuffer, 0);
+
   VkCommandBufferBeginInfo begininfo{
       VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   vkBeginCommandBuffer(m_commandBuffer, &begininfo);
 
-  // recording
   VkClearValue clearColor = {{{1.0f, 1.0f, 1.0f, 1.0f}}};
   VkRenderPassBeginInfo renderPassInfo{};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
   renderPassInfo.renderPass = m_renderPass;
   renderPassInfo.framebuffer = m_swapchainFrameBuffers[m_currentImageIndex];
-  renderPassInfo.renderArea.extent = m_swapchainExtent;
   renderPassInfo.clearValueCount = 1;
   renderPassInfo.pClearValues = &clearColor;
   renderPassInfo.renderArea.offset = {0, 0};
@@ -466,98 +464,53 @@ void VulkanRenderer::begin_frame() {
 
   vkCmdBeginRenderPass(m_commandBuffer, &renderPassInfo,
                        VK_SUBPASS_CONTENTS_INLINE);
-  // ==========================================
-  // UI VERIFICATION SUITE
-  // ==========================================
-
-  // 1. TEST ADD_RECT (A solid button background)
-  ui::styleConfig rectStyle{};
-  rectStyle.color = {0.2f, 0.6f, 0.9f, 1.0f};      // Bright blue
-  rectStyle.radius = {12.0f, 12.0f, 12.0f, 12.0f}; // Subtle rounded corners
-  rectStyle.shape = ShapeType::RoundedRect; // Map to your custom shape enum
-                                            // (e.g. Rectangle/RoundedRect)
-  rectStyle.strokeWidth = 0.0f;
-  add_rect(100.0f, 100.0f, 250.0f, 60.0f, &rectStyle);
-
-  // 2. TEST ADD_CIRCLE (Placed safely next to the rectangle)
-  ui::styleConfig circleStyle{};
-  circleStyle.color = {0.9f, 0.3f, 0.3f, 1.0f}; // Reddish circle
-  circleStyle.shape =
-      ShapeType::Circle;          // Map to your circle shape enum if applicable
-  circleStyle.strokeWidth = 2.0f; // Test border tracing properties
-  circleStyle.strokeColor = {1.0f, 1.0f, 1.0f, 1.0f};
-  add_circle(
-      400.0f, 100.0f, 30.0f,
-      &circleStyle); // x=400, y=100, radius=30 (will draw 60x60 bounding box)
-
-  // image test
-  ui::styleConfig imageStyle{};
-  imageStyle.color = {1.0f, 1.0f, 1.0f, 1.0f}; // Clear tint
-  imageStyle.radius = {12.0f, 12.0f, 12.0f,
-                       12.0f}; // Rounded borders match up perfectly
-  imageStyle.shape = ShapeType::Image;
-
-  add_image(100.0f, 200.0f, 1500.0f, 900.0f, "gta.jpg", &imageStyle);
-
-  if (m_default_font) {
-    ui::styleConfig textStyle{};
-    textStyle.font = m_default_font;
-    textStyle.fontSize = 24;
-    textStyle.color = {1.0f, 1.0f, 1.0f, 1.0f};
-    textStyle.styleFlag = font::TextStyleBit::Regular;
-    textStyle.maxWidth = 800.0f;
-    textStyle.tracking = 0.0f;
-
-    add_text(120.0f, 120.0f, "Hello Vulkan UI!", &textStyle);
-  }
-  // ==========================================
-  // DISPATCH BATCH & RECORD END
-  // ==========================================
-
-  // This physically updates your GPU buffers with data stored in m_ui_queue
-  // and submits the vkCmdDrawIndexed calls.
-  render_batch();
-  vkCmdEndRenderPass(m_commandBuffer);
-
-  vkEndCommandBuffer(m_commandBuffer);
 }
 
 void VulkanRenderer::end_frame() {
-  VkSubmitInfo submitinfo{};
-  submitinfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  // 1. Close the render pass block after all batch draws have been recorded
+  vkCmdEndRenderPass(m_commandBuffer);
 
-  VkSemaphore waitsemaphore[] = {m_image_available_sem};
-  VkPipelineStageFlags waitStages[] = {
-      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-  submitinfo.waitSemaphoreCount = 1;
-  submitinfo.pWaitSemaphores = waitsemaphore;
-  submitinfo.pWaitDstStageMask = waitStages;
-
-  submitinfo.commandBufferCount = 1;
-  submitinfo.pCommandBuffers = &m_commandBuffer;
-
-  VkSemaphore signalSemaphore[] = {m_render_finished_sem};
-  submitinfo.signalSemaphoreCount = 1;
-  submitinfo.pSignalSemaphores = signalSemaphore;
-
-  if (vkQueueSubmit(m_graphicsQueue, 1, &submitinfo, m_in_flight_fence) !=
-      VK_SUCCESS) {
-    throw std::runtime_error("failed to submit draw commandbuffer");
+  // 2. Finalize the command buffer tracking states
+  if (vkEndCommandBuffer(m_commandBuffer) != VK_SUCCESS) {
+    throw std::runtime_error(
+        "Failed to record Vulkan command buffer compilation!");
   }
 
-  VkPresentInfoKHR presentinfo{};
-  presentinfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-  presentinfo.waitSemaphoreCount = 1;
-  presentinfo.pWaitSemaphores = signalSemaphore;
+  // 3. Submit your work directly to the graphics queue execution track
+  VkSubmitInfo submitInfo{};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-  VkSwapchainKHR swapChains[] = {m_swapchain};
-  presentinfo.swapchainCount = 1;
-  presentinfo.pSwapchains = swapChains;
-  presentinfo.pImageIndices = &m_currentImageIndex;
+  VkSemaphore waitSemaphores[] = {m_image_available_sem};
+  VkPipelineStageFlags waitStages[] = {
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+  submitInfo.waitSemaphoreCount = 1;
+  submitInfo.pWaitSemaphores = waitSemaphores;
+  submitInfo.pWaitDstStageMask = waitStages;
 
-  vkQueuePresentKHR(m_graphicsQueue, &presentinfo);
+  submitInfo.commandBufferCount = 1;
+  submitInfo.pCommandBuffers = &m_commandBuffer;
+
+  VkSemaphore signalSemaphores[] = {m_render_finished_sem};
+  submitInfo.signalSemaphoreCount = 1;
+  submitInfo.pSignalSemaphores = signalSemaphores;
+
+  if (vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, m_in_flight_fence) !=
+      VK_SUCCESS) {
+    throw std::runtime_error(
+        "Failed to submit frame sequences to the Vulkan graphics queue!");
+  }
+
+  // 4. Present the swapchain image out to your desktop surface panel
+  VkPresentInfoKHR presentInfo{};
+  presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+  presentInfo.swapchainCount = 1;
+  presentInfo.pSwapchains = &m_swapchain;
+  presentInfo.pImageIndices = &m_currentImageIndex;
+  presentInfo.waitSemaphoreCount = 1;
+  presentInfo.pWaitSemaphores = signalSemaphores;
+
+  vkQueuePresentKHR(m_graphicsQueue, &presentInfo);
 }
-
 uint32_t VulkanRenderer::findMemoryType(uint32_t typeFilter,
                                         VkMemoryPropertyFlags properties) {
   VkPhysicalDeviceMemoryProperties memProperties;
@@ -1294,12 +1247,10 @@ uint32_t VulkanRenderer::get_or_create_texture(const std::string &path) {
   vkCmdCopyBufferToImage(tempCmdBuffer, stagingBuffer, newImage,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-  // 3. Downsample level by level using vkCmdBlitImage
   int32_t mipWidth = image_data->width;
   int32_t mipHeight = image_data->height;
 
   for (uint32_t i = 1; i < mipLevels; i++) {
-    // Transition previous level (i - 1) to TRANSFER_SRC so we can read from it
     barrier.subresourceRange.baseMipLevel = i - 1;
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -1310,7 +1261,6 @@ uint32_t VulkanRenderer::get_or_create_texture(const std::string &path) {
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &barrier);
 
-    // Setup blit coordinates (downscaling by half each step)
     VkImageBlit blit{};
     blit.srcOffsets[0] = {0, 0, 0};
     blit.srcOffsets[1] = {mipWidth, mipHeight, 1};
@@ -1325,7 +1275,6 @@ uint32_t VulkanRenderer::get_or_create_texture(const std::string &path) {
     blit.dstSubresource.mipLevel = i;
     blit.dstSubresource.layerCount = 1;
 
-    // Transition current destination level (i) from Undefined to TRANSFER_DST
     barrier.subresourceRange.baseMipLevel = i;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -1336,7 +1285,6 @@ uint32_t VulkanRenderer::get_or_create_texture(const std::string &path) {
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &barrier);
 
-    // Execute the linear blit on the GPU graphics queue
     vkCmdBlitImage(
         tempCmdBuffer, newImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, newImage,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
@@ -1357,7 +1305,6 @@ uint32_t VulkanRenderer::get_or_create_texture(const std::string &path) {
       mipHeight /= 2;
   }
 
-  // Finally, transition the very last remaining mip level to SHADER_READ_ONLY
   barrier.subresourceRange.baseMipLevel = mipLevels - 1;
   barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
   barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1381,9 +1328,7 @@ uint32_t VulkanRenderer::get_or_create_texture(const std::string &path) {
   vkFreeCommandBuffers(m_device, m_commandPool, 1, &tempCmdBuffer);
   vkDestroyBuffer(m_device, stagingBuffer, nullptr);
   vkFreeMemory(m_device, stagingBufferMemory, nullptr);
-  // =================================================================
-  // REPLACE UNTIL HERE
-  // =================================================================
+
   VkImageViewCreateInfo viewInfo{};
   viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
   viewInfo.image = newImage;

@@ -1,4 +1,3 @@
-
 #include "renderer/font/freetype_layout.hpp"
 #include "renderer/font/interface.hpp"
 #include "renderer/style.hpp"
@@ -9,11 +8,15 @@
 
 namespace ui {
 
-void VulkanRenderer::add_rect(float x, float y, float w, float h,
-                              ui::styleConfig *style) {
-  UIInstance instance;
-  instance.pos = {x, y};
-  instance.size = {w, h};
+void VulkanRenderer::add_rect(const math::vec2<float> &globalPosition,
+                              const math::vec2<float> &computedSize,
+                              const ui::styleConfig *style) {
+  if (!style)
+    return;
+
+  UIInstance instance{};
+  instance.pos = globalPosition;
+  instance.size = computedSize;
   instance.color = style->color;
   instance.radius = style->radius;
   instance.shapeType = static_cast<uint32_t>(style->shape);
@@ -22,18 +25,25 @@ void VulkanRenderer::add_rect(float x, float y, float w, float h,
   instance.dotGap = style->dotGap;
   instance.dotSize = style->dotSize;
   instance.strokePosition = style->strokePosition;
+
   m_ui_queue.push_back(instance);
 }
 
-void VulkanRenderer::add_circle(float x, float y, float radius,
-                                ui::styleConfig *style) {
+void VulkanRenderer::add_circle(const math::vec2<float> &globalPosition,
+                                float radius, ui::styleConfig *style) {
+  if (!style)
+    return;
+
   style->radius = {radius, radius, radius, radius};
-  add_rect(x, y, radius * 2, radius * 2, style);
+  math::vec2<float> diameterSize{radius * 2.0f, radius * 2.0f};
+
+  add_rect(globalPosition, diameterSize, style);
 }
 
-void VulkanRenderer::add_text(float x, float y, const std::string &text,
-                              ui::styleConfig *style) {
-  if (!style->font)
+void VulkanRenderer::add_text(const math::vec2<float> &globalPosition,
+                              const std::string &text,
+                              const ui::styleConfig *style) {
+  if (!style || !style->font)
     return;
 
   std::vector<font::TextRun> runs = font::TextLayoutEngine::parseRichText(
@@ -43,18 +53,20 @@ void VulkanRenderer::add_text(float x, float y, const std::string &text,
     runs[0].styleFlags = static_cast<uint8_t>(style->styleFlag);
   }
 
-  std::vector<ui::font::PositionedGlyph> PositionedGlyph =
+  std::vector<ui::font::PositionedGlyph> positionedGlyphs =
       font::TextLayoutEngine::calcLayout(
           runs, static_cast<ui::font::Font *>(style->font), style->maxWidth,
           style->tracking);
 
-  for (const auto &pg : PositionedGlyph) {
+  for (const auto &pg : positionedGlyphs) {
     UIInstance instance{};
-    instance.pos = {x + pg.rect.x, y + pg.rect.y};
+    // Apply local glyph offsets relative to the parent element's global layout
+    // position
+    instance.pos = {globalPosition.x + pg.rect.x, globalPosition.y + pg.rect.y};
     instance.size = {pg.rect.z, pg.rect.w};
     instance.color = pg.color;
 
-    instance.shapeType = 2;
+    instance.shapeType = 2; // SHAPE_TEXT
     instance.uvMin = {pg.uv.x, pg.uv.y};
     instance.uvMax = {pg.uv.z, pg.uv.w};
 
@@ -65,14 +77,15 @@ void VulkanRenderer::add_text(float x, float y, const std::string &text,
   }
 }
 
-void VulkanRenderer::add_image(float x, float y, float w, float h,
+void VulkanRenderer::add_image(const math::vec2<float> &globalPosition,
+                               const math::vec2<float> &computedSize,
                                const std::string &path,
-                               ui::styleConfig *style) {
+                               const ui::styleConfig *style) {
   uint32_t textureId = get_or_create_texture(path);
 
   UIInstance instance{};
-  instance.pos = {x, y};
-  instance.size = {w, h};
+  instance.pos = globalPosition;
+  instance.size = computedSize;
   instance.color =
       style ? style->color : math::vec4<float>{1.0f, 1.0f, 1.0f, 1.0f};
   instance.radius =
@@ -84,7 +97,6 @@ void VulkanRenderer::add_image(float x, float y, float w, float h,
   instance.uvMin = {0.0f, 0.0f};
   instance.uvMax = {1.0f, 1.0f};
 
-  // Safe configurations for optional borders on the canvas layout
   instance.strokeWidth = style ? style->strokeWidth : 0.0f;
   instance.strokeColor =
       style ? style->strokeColor : math::vec4<float>{0.0f, 0.0f, 0.0f, 0.0f};

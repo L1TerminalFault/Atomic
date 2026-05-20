@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/style.hpp"
 #include <memory>
 
 namespace ui {
@@ -9,6 +10,20 @@ public:
   virtual void end_frame() = 0;
 
   virtual void on_resize(int width, int height) = 0;
+
+  virtual void add_rect(const math::vec2<float> &globalPosition,
+                        const math::vec2<float> &computedSize,
+                        const ui::styleConfig *style) = 0;
+  virtual void add_circle(const math::vec2<float> &globalPosition, float radius,
+                          ui::styleConfig *style) = 0;
+  virtual void add_text(const math::vec2<float> &globalPosition,
+                        const std::string &text,
+                        const ui::styleConfig *style) = 0;
+  virtual void add_image(const math::vec2<float> &globalPosition,
+                         const math::vec2<float> &computedSize,
+                         const std::string &path,
+                         const ui::styleConfig *style) = 0;
+  virtual void render_batch() = 0;
 
   static std::unique_ptr<Renderer> Create(class Window *window);
 };

@@ -24,6 +24,8 @@ private:
   SDL_Window *m_window = nullptr;
   SDL_GLContext m_gl_context = nullptr;
   bool m_should_close = false;
+  int m_width;
+  int m_height;
 };
 
 } // namespace ui
