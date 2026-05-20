@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/interface.hpp"
 #include "windowing/interface.hpp"
 #include <SDL3/SDL.h>
 #include <memory>

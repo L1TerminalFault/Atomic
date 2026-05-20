@@ -7,7 +7,7 @@
 #include <unordered_map>
 
 namespace ui::font {
-class FreeTypeFont : Font {
+class FreeTypeFont : public Font {
 private:
   FT_Face m_face = nullptr;
   static FT_Library s_library;
@@ -42,6 +42,9 @@ public:
                             uint8_t styleFlags) override;
   float getLineHeight() const override { return m_lineHeight; };
   float getAscender() const override { return m_ascender; };
+  const uint8_t *getRawPixels() const { return m_atlasPixels.data(); }
+  uint32_t getAtlasWidth() const { return m_atlasWidth; }
+  uint32_t getAtlasHeight() const { return m_atlasHeight; }
   void *getTextureHandle() override { return m_vulkanTextureHandle; };
   GlyphInfo rasterizeAndPackGlyph(char32_t codepoint, uint32_t size,
                                   uint8_t styleFlags);

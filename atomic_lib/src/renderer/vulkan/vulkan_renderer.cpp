@@ -1,5 +1,6 @@
 #include "vulkan_renderer.hpp"
 #include "math/vec.hpp"
+#include "renderer/font/interface.hpp"
 #include "renderer/style.hpp"
 #include "renderer/vulkan/vulkan_shader.hpp"
 #include "windowing/interface.hpp"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <vulkan/vulkan.h>
@@ -34,6 +36,15 @@ VulkanRenderer::VulkanRenderer(Window *window) : m_window(window) {
 VulkanRenderer::~VulkanRenderer() {
   // clean up
   vkDeviceWaitIdle(m_device);
+  // Clean up Font Atlas Views and Samplers
+  if (m_fontAtlasSampler != VK_NULL_HANDLE)
+    vkDestroySampler(m_device, m_fontAtlasSampler, nullptr);
+  if (m_fontAtlasImageView != VK_NULL_HANDLE)
+    vkDestroyImageView(m_device, m_fontAtlasImageView, nullptr);
+  if (m_fontAtlasImage != VK_NULL_HANDLE)
+    vkDestroyImage(m_device, m_fontAtlasImage, nullptr);
+  if (m_fontAtlasMemory != VK_NULL_HANDLE)
+    vkFreeMemory(m_device, m_fontAtlasMemory, nullptr);
 
   vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
   vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
@@ -452,17 +463,47 @@ void VulkanRenderer::begin_frame() {
 
   vkCmdBeginRenderPass(m_commandBuffer, &renderPassInfo,
                        VK_SUBPASS_CONTENTS_INLINE);
-  // ui staff
-  ui::styleConfig myStyle;
-  myStyle.color = {0.9f, 0.9f, 0.9f, 1.0f};      // black
-  myStyle.radius = {20.0f, 20.0f, 20.0f, 20.0f}; // Rounded corners
+  // ==========================================
+  // UI VERIFICATION SUITE
+  // ==========================================
 
-  // Draw a button-sized rect in the middle of the screen
-  add_rect(100.0f, 100.0f, 200.0f, 60.0f, &myStyle);
-  ui::styleConfig circleStyle;
-  circleStyle.color = {0.0f, 0.0f, 0.0f, 1.0f};
-  // add_circle(100.0f, 160.0f, 100.0f, &circleStyle);
+  // 1. TEST ADD_RECT (A solid button background)
+  ui::styleConfig rectStyle{};
+  rectStyle.color = {0.2f, 0.6f, 0.9f, 1.0f};      // Bright blue
+  rectStyle.radius = {12.0f, 12.0f, 12.0f, 12.0f}; // Subtle rounded corners
+  rectStyle.shape = ShapeType::RoundedRect; // Map to your custom shape enum
+                                            // (e.g. Rectangle/RoundedRect)
+  rectStyle.strokeWidth = 0.0f;
+  add_rect(100.0f, 100.0f, 250.0f, 60.0f, &rectStyle);
 
+  // 2. TEST ADD_CIRCLE (Placed safely next to the rectangle)
+  ui::styleConfig circleStyle{};
+  circleStyle.color = {0.9f, 0.3f, 0.3f, 1.0f}; // Reddish circle
+  circleStyle.shape =
+      ShapeType::Circle;          // Map to your circle shape enum if applicable
+  circleStyle.strokeWidth = 2.0f; // Test border tracing properties
+  circleStyle.strokeColor = {1.0f, 1.0f, 1.0f, 1.0f};
+  add_circle(
+      400.0f, 100.0f, 30.0f,
+      &circleStyle); // x=400, y=100, radius=30 (will draw 60x60 bounding box)
+
+  if (m_default_font) {
+    ui::styleConfig textStyle{};
+    textStyle.font = m_default_font;
+    textStyle.fontSize = 24;
+    textStyle.color = {1.0f, 1.0f, 1.0f, 1.0f};
+    textStyle.styleFlag = font::TextStyleBit::Regular;
+    textStyle.maxWidth = 800.0f;
+    textStyle.tracking = 0.0f;
+
+    add_text(120.0f, 120.0f, "Hello Vulkan UI!", &textStyle);
+  }
+  // ==========================================
+  // DISPATCH BATCH & RECORD END
+  // ==========================================
+
+  // This physically updates your GPU buffers with data stored in m_ui_queue
+  // and submits the vkCmdDrawIndexed calls.
   render_batch();
   vkCmdEndRenderPass(m_commandBuffer);
 
@@ -528,30 +569,48 @@ void VulkanRenderer::create_descriptor_set_layout() {
   layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
   layoutBinding.descriptorCount = 1;
   layoutBinding.stageFlags =
-      VK_SHADER_STAGE_VERTEX_BIT; // Vertex shader needs it
+      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+  // New binding slot for our texture lookup engine inside ui.frag
+  VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+  samplerLayoutBinding.binding = 1;
+  samplerLayoutBinding.descriptorType =
+      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  samplerLayoutBinding.descriptorCount = 1;
+  samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+  std::array<VkDescriptorSetLayoutBinding, 2> bindings = {layoutBinding,
+                                                          samplerLayoutBinding};
 
   VkDescriptorSetLayoutCreateInfo layoutInfo{
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  layoutInfo.bindingCount = 1;
-  layoutInfo.pBindings = &layoutBinding;
+  layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+  layoutInfo.pBindings = bindings.data();
 
-  vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr,
-                              &m_descriptorSetLayout);
+  if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr,
+                                  &m_descriptorSetLayout) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create descriptor set layout!");
+  }
 }
 
 void VulkanRenderer::create_descriptor_pool() {
-  VkDescriptorPoolSize poolSize{};
-  poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  poolSize.descriptorCount = 1;
+  std::array<VkDescriptorPoolSize, 2> poolSizes{};
+  poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  poolSizes[0].descriptorCount = 1;
+
+  poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  poolSizes[1].descriptorCount = 1;
 
   VkDescriptorPoolCreateInfo poolInfo{
       VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-  poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  poolInfo.poolSizeCount = 1;
-  poolInfo.pPoolSizes = &poolSize;
+  poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+  poolInfo.pPoolSizes = poolSizes.data();
   poolInfo.maxSets = 1;
 
-  vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool);
+  if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to create descriptor pool!");
+  }
 }
 
 void VulkanRenderer::create_descriptor_set() {
@@ -561,27 +620,88 @@ void VulkanRenderer::create_descriptor_set() {
   allocInfo.descriptorSetCount = 1;
   allocInfo.pSetLayouts = &m_descriptorSetLayout;
 
-  vkAllocateDescriptorSets(m_device, &allocInfo, &m_descriptorSet);
+  if (vkAllocateDescriptorSets(m_device, &allocInfo, &m_descriptorSet) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to allocate descriptor sets!");
+  }
 
-  // Now connect the Set to your actual Buffer
+  // 1. Prepare the instance queue data buffer write description (Always valid)
   VkDescriptorBufferInfo bufferInfo{};
   bufferInfo.buffer = m_storageBuffer;
   bufferInfo.offset = 0;
   bufferInfo.range = VK_WHOLE_SIZE;
 
-  VkWriteDescriptorSet descriptorWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-  descriptorWrite.dstSet = m_descriptorSet;
-  descriptorWrite.dstBinding = 0;
-  descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  descriptorWrite.descriptorCount = 1;
-  descriptorWrite.pBufferInfo = &bufferInfo;
+  VkWriteDescriptorSet bufferWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+  bufferWrite.dstSet = m_descriptorSet;
+  bufferWrite.dstBinding = 0;
+  bufferWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  bufferWrite.descriptorCount = 1;
+  bufferWrite.pBufferInfo = &bufferInfo;
 
-  vkUpdateDescriptorSets(m_device, 1, &descriptorWrite, 0, nullptr);
+  std::vector<VkWriteDescriptorSet> descriptorWrites = {bufferWrite};
+
+  // 2. ONLY configure and push the image sampler write if handles are
+  // allocated!
+  VkDescriptorImageInfo imageInfo{};
+  VkWriteDescriptorSet samplerWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+
+  if (m_fontAtlasImageView != VK_NULL_HANDLE &&
+      m_fontAtlasSampler != VK_NULL_HANDLE) {
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageView = m_fontAtlasImageView;
+    imageInfo.sampler = m_fontAtlasSampler;
+
+    samplerWrite.dstSet = m_descriptorSet;
+    samplerWrite.dstBinding = 1;
+    samplerWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerWrite.descriptorCount = 1;
+    samplerWrite.pImageInfo = &imageInfo;
+
+    descriptorWrites.push_back(samplerWrite);
+  }
+
+  // Execute the update pass with whatever configuration is safe right now
+  vkUpdateDescriptorSets(m_device,
+                         static_cast<uint32_t>(descriptorWrites.size()),
+                         descriptorWrites.data(), 0, nullptr);
 }
-
 void VulkanRenderer::render_batch() {
   if (m_ui_queue.empty())
     return;
+
+  if (m_default_font) {
+    auto *concreteFont = static_cast<ui::font::FreeTypeFont *>(m_default_font);
+
+    if (concreteFont->consumeTextureDirtyBit()) {
+      // Query properties straight from your abstraction layer
+      // If m_atlasPixels is private, verify your accessor name (e.g.,
+      // m_atlasPixels.data() or getRawPixels())
+      const uint8_t *pixels = concreteFont->getRawPixels();
+      uint32_t width = 1024; // Matches your FreeTypeFont defaults
+      uint32_t height = 1024;
+
+      // Upload the raw R8 single-channel data array to your Vulkan texture
+      // memory handles
+      create_texture_resource(pixels, width, height);
+
+      // Instantly update descriptor binding 1 so the sampler can read the new
+      // image view
+      VkDescriptorImageInfo imageInfo{};
+      imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      imageInfo.imageView = m_fontAtlasImageView;
+      imageInfo.sampler = m_fontAtlasSampler;
+
+      VkWriteDescriptorSet samplerWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      samplerWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      samplerWrite.dstSet = m_descriptorSet;
+      samplerWrite.dstBinding = 1;
+      samplerWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      samplerWrite.descriptorCount = 1;
+      samplerWrite.pImageInfo = &imageInfo;
+
+      vkUpdateDescriptorSets(m_device, 1, &samplerWrite, 0, nullptr);
+    }
+  }
 
   void *data;
   // since this is done every frame maybe mapping ones at the start of app and
@@ -800,5 +920,192 @@ void VulkanRenderer::create_graphics_pipeline() {
 
   vkDestroyShaderModule(m_device, fragShaderModule, nullptr);
   vkDestroyShaderModule(m_device, vertShaderModule, nullptr);
+}
+
+void VulkanRenderer::create_texture_resource(const uint8_t *pixels,
+                                             uint32_t width, uint32_t height) {
+  VkDeviceSize imageSize =
+      width * height; // 1 byte per pixel for R8_UNORM (FreeType standard)
+
+  // 1. Create a Staging Buffer to host the CPU pixel memory
+  VkBuffer stagingBuffer;
+  VkDeviceMemory stagingBufferMemory;
+
+  VkBufferCreateInfo bufferInfo{};
+  bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bufferInfo.size = imageSize;
+  bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+  if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &stagingBuffer) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to create staging buffer for font atlas!");
+  }
+
+  VkMemoryRequirements memRequirements;
+  vkGetBufferMemoryRequirements(m_device, stagingBuffer, &memRequirements);
+
+  VkMemoryAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocInfo.allocationSize = memRequirements.size;
+  allocInfo.memoryTypeIndex = findMemoryType(
+      memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+  vkAllocateMemory(m_device, &allocInfo, nullptr, &stagingBufferMemory);
+  vkBindBufferMemory(m_device, stagingBuffer, stagingBufferMemory, 0);
+
+  // 2. Map staging buffer memory and copy the font pixel array directly
+  void *data;
+  vkMapMemory(m_device, stagingBufferMemory, 0, imageSize, 0, &data);
+  std::memcpy(data, pixels, static_cast<size_t>(imageSize));
+  vkUnmapMemory(m_device, stagingBufferMemory);
+
+  // 3. Create the actual VkImage Texture destination on the GPU hardware
+  VkImageCreateInfo imageInfo{};
+  imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  imageInfo.imageType = VK_IMAGE_TYPE_2D;
+  imageInfo.extent.width = width;
+  imageInfo.extent.height = height;
+  imageInfo.extent.depth = 1;
+  imageInfo.mipLevels = 1;
+  imageInfo.arrayLayers = 1;
+  imageInfo.format =
+      VK_FORMAT_R8_UNORM; // Matching our single-channel FreeType cache format
+  imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+  imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  imageInfo.usage =
+      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+
+  if (vkCreateImage(m_device, &imageInfo, nullptr, &m_fontAtlasImage) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to create font atlas image!");
+  }
+
+  vkGetImageMemoryRequirements(m_device, m_fontAtlasImage, &memRequirements);
+  allocInfo.allocationSize = memRequirements.size;
+  allocInfo.memoryTypeIndex = findMemoryType(
+      memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+  vkAllocateMemory(m_device, &allocInfo, nullptr, &m_fontAtlasMemory);
+  vkBindImageMemory(m_device, m_fontAtlasImage, m_fontAtlasMemory, 0);
+
+  // 4. Record and submit immediate execution commands for image layout
+  // transitions and copy operations
+  VkCommandBufferAllocateInfo cmdAllocInfo{};
+  cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  cmdAllocInfo.commandPool = m_commandPool;
+  cmdAllocInfo.commandBufferCount = 1;
+
+  VkCommandBuffer tempCommandBuffer;
+  vkAllocateCommandBuffers(m_device, &cmdAllocInfo, &tempCommandBuffer);
+
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(tempCommandBuffer, &beginInfo);
+
+  // Barrier 1: UNDEFINED -> TRANSFER_DST_OPTIMAL
+  VkImageMemoryBarrier barrier{};
+  barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.image = m_fontAtlasImage;
+  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  barrier.subresourceRange.baseMipLevel = 0;
+  barrier.subresourceRange.levelCount = 1;
+  barrier.subresourceRange.baseArrayLayer = 0;
+  barrier.subresourceRange.layerCount = 1;
+  barrier.srcAccessMask = 0;
+  barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+  vkCmdPipelineBarrier(tempCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &barrier);
+
+  // Buffer to Image Copy Command
+  VkBufferImageCopy region{};
+  region.bufferOffset = 0;
+  region.bufferRowLength = 0;
+  region.bufferImageHeight = 0;
+  region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  region.imageSubresource.mipLevel = 0;
+  region.imageSubresource.baseArrayLayer = 0;
+  region.imageSubresource.layerCount = 1;
+  region.imageOffset = {0, 0, 0};
+  region.imageExtent = {width, height, 1};
+
+  vkCmdCopyBufferToImage(tempCommandBuffer, stagingBuffer, m_fontAtlasImage,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+  // Barrier 2: TRANSFER_DST_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
+  barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+  vkCmdPipelineBarrier(tempCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &barrier);
+
+  vkEndCommandBuffer(tempCommandBuffer);
+
+  // Submit to Graphic Queue instantly
+  VkSubmitInfo submitInfo{};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submitInfo.commandBufferCount = 1;
+  submitInfo.pCommandBuffers = &tempCommandBuffer;
+
+  vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+  vkQueueWaitIdle(m_graphicsQueue); // Simple flush synchronize execution path
+
+  // Cleanup resources used for transfer pipeline operations
+  vkFreeCommandBuffers(m_device, m_commandPool, 1, &tempCommandBuffer);
+  vkDestroyBuffer(m_device, stagingBuffer, nullptr);
+  vkFreeMemory(m_device, stagingBufferMemory, nullptr);
+
+  // ==========================================
+  // CREATE IMAGE VIEW & SAMPLER FOR THE ATLAS
+  // ==========================================
+  VkImageViewCreateInfo viewInfo{};
+  viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  viewInfo.image = m_fontAtlasImage;
+  viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  viewInfo.format = VK_FORMAT_R8_UNORM;
+  viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  viewInfo.subresourceRange.baseMipLevel = 0;
+  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.baseArrayLayer = 0;
+  viewInfo.subresourceRange.layerCount = 1;
+
+  if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_fontAtlasImageView) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to create font atlas image view!");
+  }
+
+  VkSamplerCreateInfo samplerInfo{};
+  samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  samplerInfo.magFilter = VK_FILTER_LINEAR;
+  samplerInfo.minFilter = VK_FILTER_LINEAR;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.anisotropyEnable = VK_FALSE;
+  samplerInfo.maxAnisotropy = 1.0f;
+  samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+  samplerInfo.unnormalizedCoordinates = VK_FALSE;
+  samplerInfo.compareEnable = VK_FALSE;
+  samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+  samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+  if (vkCreateSampler(m_device, &samplerInfo, nullptr, &m_fontAtlasSampler) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to create font atlas sampler!");
+  }
 }
 } // namespace ui

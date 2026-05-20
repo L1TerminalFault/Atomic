@@ -26,8 +26,8 @@ struct UIInstance {
   alignas(4) float dotGap;
   alignas(4) float dotSize;
 
-  float _pad[3];
-
+  alignas(8) math::vec2<float> uvMin;
+  alignas(8) math::vec2<float> uvMax;
   alignas(16) math::vec4<float> strokeColor;
 };
 
@@ -43,6 +43,7 @@ public:
   void begin_frame() override;
   void end_frame() override;
   void on_resize(int width, int height) override;
+  void set_default_font(ui::font::Font *font) { m_default_font = font; }
 
 private:
   void init_vulkan();
@@ -60,12 +61,24 @@ private:
   void create_descriptor_set_layout();
   void create_descriptor_pool();
   void create_descriptor_set();
+  void *m_default_font = nullptr;
 
   uint32_t findMemoryType(uint32_t typeFilter,
                           VkMemoryPropertyFlags properties);
   // -- drawing code --
   void add_rect(float x, float y, float w, float h, ui::styleConfig *style);
   void add_circle(float x, float y, float radius, ui::styleConfig *style);
+  void add_text(float x, float y, const std::string &text,
+                ui::styleConfig *style);
+  // Font Atlas Resources
+  VkImage m_fontAtlasImage = VK_NULL_HANDLE;
+  VkDeviceMemory m_fontAtlasMemory = VK_NULL_HANDLE;
+  VkImageView m_fontAtlasImageView =
+      VK_NULL_HANDLE; // You will need this to bind to your descriptor set!
+  VkSampler m_fontAtlasSampler =
+      VK_NULL_HANDLE; // To sample pixels in your fragment shader
+  void create_texture_resource(const uint8_t *pixels, uint32_t width,
+                               uint32_t height);
   // drawing codes --
   VkShaderModule createShaderModule(const std::vector<char> &code);
 

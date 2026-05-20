@@ -27,6 +27,7 @@ public:
   virtual float get_dpi_scale() { return 1.0f; };
 
   std::unique_ptr<Window> Create(const WindowConfig &config);
+  Renderer *get_renderer() { return m_renderer.get(); }
 
 protected:
   std::unique_ptr<Renderer> m_renderer;

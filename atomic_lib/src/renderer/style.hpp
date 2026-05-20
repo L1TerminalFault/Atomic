@@ -1,6 +1,8 @@
 #pragma once
 
 #include "math/vec.hpp"
+#include "renderer/font/freetype_font.hpp"
+#include "renderer/font/interface.hpp"
 #include <cstdint>
 
 namespace ui {
@@ -8,8 +10,7 @@ namespace ui {
 enum class ShapeType : uint32_t {
   RoundedRect = 0,
   Circle = 1,
-  Triangle = 2,
-  Ring = 3
+  Text = 2,
 };
 
 struct styleConfig {
@@ -22,6 +23,12 @@ struct styleConfig {
   float dotGap = 0.0f; // 0.0 means solid line
   float dotSize = 0.0f;
   uint32_t strokePosition = 2; // 0-inner, 1-center, 2-out
+                               //
+  void *font;
+  int fontSize;
+  ui::font::TextStyleBit styleFlag;
+  int tracking;
+  int maxWidth;
 };
 
 } // namespace ui

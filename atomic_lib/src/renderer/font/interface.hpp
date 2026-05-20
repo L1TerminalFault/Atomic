@@ -39,7 +39,13 @@ struct GlyphKey {
   }
 };
 
-struct GlyphInfo {};
+struct GlyphInfo {
+  math::vec2<float> uvMin;
+  math::vec2<float> uvMax;
+  math::vec2<float> size;
+  math::vec2<float> bearing;
+  float advanceX;
+};
 
 class Font {
 public:

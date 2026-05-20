@@ -1,7 +1,9 @@
 #version 450
 #define SHAPE_ROUNDED_RECT 0
 #define SHAPE_CIRCLE 1
-#define SHAPE_TRIANGLE 2
+#define SHAPE_TEXT 2
+
+layout(binding = 1) uniform sampler2D fontAtlas; // Bound to descriptor layout slot 1
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inUV;
@@ -14,6 +16,8 @@ layout(location = 6) in vec4 inStrokeColor;
 layout(location = 7) in float inDotGap;
 layout(location = 8) in float inDotSize;
 layout(location = 9) flat in uint inStrokePos;
+layout(location = 10) in vec2 inUVMin;
+layout(location = 11) in vec2 inUVMax;
 
 layout(location = 0) out vec4 fColor;
 
@@ -25,6 +29,22 @@ float roundedBoxSDF(vec2 p, vec2 b, vec4 r){
 }
 
 void main(){
+  // Handle text execution rendering branch early
+  if (inShapeType == SHAPE_TEXT) {
+    // Interpolate the exact sub-pixel atlas region for this glyph
+    vec2 texCoord = mix(inUVMin, inUVMax, inUV);
+    
+    // Sample the raw R8 single-channel texture map mask
+    float mask = texture(fontAtlas, texCoord).r;
+    
+    // Simple alpha mask evaluation test
+    if (mask < 0.01) discard;
+    
+    fColor = vec4(inColor.rgb, inColor.a * mask);
+    return;
+  }
+
+  // Vector Primitives Math Pass (Rectangles & Circles)
   vec2 center = inSize * 0.5;
   vec2 p = (inUV * inSize) - center;
 
@@ -57,7 +77,7 @@ void main(){
       startEdge = 0.0;
       endEdge = inStrokeWidth;
     }
-    // TODO: review the quality of this dotted border
+
     float strokeAlpha = smoothstep(-1.0, 1.0, d - startEdge) - smoothstep(-1.0, 1.0, d - endEdge);
 
     if (inDotGap > 0.0) {
@@ -74,6 +94,7 @@ void main(){
       }
     }
     fragColor = mix(fragColor, inStrokeColor, strokeAlpha * inStrokeColor.a);
-    fColor = fragColor; 
   }
+  
+  fColor = fragColor;
 }
