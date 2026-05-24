@@ -29,30 +29,87 @@ struct Size2D {
   Size y = fit;
 };
 
+struct EdgeInsets {
+  float top = 0.0f;
+  float right = 0.0f;
+  float bottom = 0.0f;
+  float left = 0.0f;
+
+  constexpr EdgeInsets() = default;
+  constexpr EdgeInsets(float t, float r, float b, float l)
+      : top(t), right(r), bottom(b), left(l) {}
+
+  static constexpr EdgeInsets all(float val) {
+    return EdgeInsets(val, val, val, val);
+  }
+  static constexpr EdgeInsets horizontal(float val) {
+    return EdgeInsets(0.0f, val, 0.0f, val);
+  }
+  static constexpr EdgeInsets vertical(float val) {
+    return EdgeInsets(val, 0.0f, val, 0.0f);
+  }
+
+  constexpr operator math::vec4<float>() const {
+    return {top, right, bottom, left};
+  }
+};
+
+struct CornerRadius {
+  float topLeft = 0.0f;
+  float topRight = 0.0f;
+  float bottomRight = 0.0f;
+  float bottomLeft = 0.0f;
+
+  constexpr CornerRadius() = default;
+  constexpr CornerRadius(float tl, float tr, float br, float bl)
+      : topLeft(tl), topRight(tr), bottomRight(br), bottomLeft(bl) {}
+
+  static constexpr CornerRadius all(float val) {
+    return CornerRadius(val, val, val, val);
+  }
+  static constexpr CornerRadius top(float val) {
+    return CornerRadius(val, val, 0.0f, 0.0f);
+  }
+  static constexpr CornerRadius bottom(float val) {
+    return CornerRadius(0.0f, 0.0f, val, val);
+  }
+  static constexpr CornerRadius left(float val) {
+    return CornerRadius(val, 0.0f, 0.0f, val);
+  }
+  static constexpr CornerRadius right(float val) {
+    return CornerRadius(0.0f, val, val, 0.0f);
+  }
+
+  constexpr operator math::vec4<float>() const {
+    return {topLeft, topRight, bottomRight, bottomLeft};
+  }
+};
+
 struct styleConfig {
   math::vec2<float> pos{0.0f, 0.0f};
   Size2D size{ui::SizeFit{}, ui::SizeFit{}};
-  math::vec4<float> margin{0.0f, 0.0f, 0.0f,
-                           0.0f}; // [Top, Right, Bottom, Left]
-  math::vec4<float> padding{0.0f, 0.0f, 0.0f,
-                            0.0f}; // [Top, Right, Bottom, Left]
+
+  EdgeInsets margin;
+  EdgeInsets padding;
   math::vec2<float> gap{0.0f, 0.0f};
   FlexDirection flexDirection = FlexDirection::Column;
+
   math::vec4<float> color = math::vec4<float>::all(1);
-  math::vec4<float> radius{0.0f, 0.0f, 0.0f, 0.0f};
+  CornerRadius radius;
   ShapeType shape = ShapeType::RoundedRect;
+
   float strokeWidth = 1.0f;
   math::vec4<float> strokeColor{0.3f, 0.3f, 0.3f, 1.0f};
   float dotGap = 0.0f;
   float dotSize = 0.0f;
-  uint32_t strokePosition = 2; // 0-inner, 1-center, 2-out
+  uint32_t strokePosition = 2;
+
   void *font = nullptr;
   int fontSize = 16;
   ui::font::TextStyleBit styleFlag = ui::font::TextStyleBit::Regular;
   int tracking = 0;
   int maxWidth = 0;
 
-  // builder pattern for styling
   constexpr styleConfig &SetPos(const math::vec2<float> &val) {
     pos = val;
     return *this;
@@ -61,11 +118,11 @@ struct styleConfig {
     size = val;
     return *this;
   }
-  constexpr styleConfig &SetMargin(const math::vec4<float> &val) {
+  constexpr styleConfig &SetMargin(const EdgeInsets &val) {
     margin = val;
     return *this;
   }
-  constexpr styleConfig &SetPadding(const math::vec4<float> &val) {
+  constexpr styleConfig &SetPadding(const EdgeInsets &val) {
     padding = val;
     return *this;
   }
@@ -82,7 +139,7 @@ struct styleConfig {
     color = val;
     return *this;
   }
-  constexpr styleConfig &SetRadius(const math::vec4<float> &val) {
+  constexpr styleConfig &SetRadius(const CornerRadius &val) {
     radius = val;
     return *this;
   }

@@ -9,9 +9,9 @@ namespace ui {
 
 class DivElement : public IElement {
 public:
-  DivElement(const styleConfig &cfg,
+  DivElement(const styleConfig &style,
              std::vector<std::unique_ptr<IElement>> &&initChildren)
-      : m_style(cfg) {
+      : m_style(style) {
     m_children.reserve(initChildren.size());
 
     for (auto &child : initChildren) {
@@ -56,7 +56,7 @@ Div(const styleConfig &cfg,
 }
 
 template <typename... Args>
-inline std::unique_ptr<IElement> Div(const styleConfig &cfg,
+inline std::unique_ptr<IElement> Div(const styleConfig &style,
                                      Args &&...children) {
   std::vector<std::unique_ptr<IElement>> vec;
   vec.reserve(sizeof...(children));
@@ -64,7 +64,7 @@ inline std::unique_ptr<IElement> Div(const styleConfig &cfg,
   // Fold expression to move each child into the vector sequentially
   (vec.push_back(std::forward<Args>(children)), ...);
 
-  return std::make_unique<DivElement>(cfg, std::move(vec));
+  return std::make_unique<DivElement>(style, std::move(vec));
 }
 
 } // namespace ui

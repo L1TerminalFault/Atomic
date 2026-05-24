@@ -16,19 +16,21 @@ int main() {
                             100};
     auto window = ui::SDLWindow::Create(config);
 
-    auto rootdiv = Div(
-        ui::styleConfig()
-            .SetColor(ui::Color::slate[900])
-            .SetPadding({24.0f, 24.0f, 24.0f, 24.0f})
-            .SetRadius(math::vec4<float>::all(12))
-            .SetFlexDirection(ui::FlexDirection::Row)
-            .SetGap({16.0f, 0.0f})
-            .SetSize({ui::SizeFit{}, ui::SizeFit{}}),
-        Text(
-            ui::styleConfig().SetColor(ui::Color::emerald[400]).SetFontSize(20),
-            "Success"));
+    auto screen =
+        Div(ui::styleConfig()
+                .SetPadding(EdgeInsets::all(50))
+                .SetStrokeWidth(0)
+                .SetColor(ui::Color::transparent),
+            Div(ui::styleConfig()
+                    .SetColor(ui::Color::slate[900])
+                    .SetMargin(EdgeInsets::horizontal(19))
+                    .SetPadding(EdgeInsets::all(20))
+                    .SetRadius(ui::CornerRadius::all(10))
+                    .SetSize({ui::SizeFit{}, ui::SizeFit{}}),
+                Text(ui::styleConfig().SetColor(ui::Color::emerald[400]),
+                     "Success")));
 
-    window->SetRootNode(std::move(rootdiv));
+    window->SetRootNode(std::move(screen));
 
     while (!window->should_close()) {
       window->poll_events();

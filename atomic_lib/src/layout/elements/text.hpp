@@ -63,18 +63,19 @@ private:
 };
 
 // Base factory variant for a single string literal or pre-built std::string
-inline std::unique_ptr<IElement> Text(const styleConfig &cfg,
+inline std::unique_ptr<IElement> Text(const styleConfig &style,
                                       std::string text = "") {
-  return std::make_unique<TextElement>(cfg, std::move(text));
+  return std::make_unique<TextElement>(style, std::move(text));
 }
 
 // Overload for cases where you might pass multiple strings, tokens, or
 // variables to concatenate
 template <typename... Args>
-inline std::unique_ptr<IElement> Text(const styleConfig &cfg, Args &&...args) {
+inline std::unique_ptr<IElement> Text(const styleConfig &style,
+                                      Args &&...args) {
   // Fold expression strings append into a single stack-allocated buffer
   std::string consolidated = (std::string("") + ... + std::forward<Args>(args));
-  return std::make_unique<TextElement>(cfg, std::move(consolidated));
+  return std::make_unique<TextElement>(style, std::move(consolidated));
 }
 
 } // namespace ui

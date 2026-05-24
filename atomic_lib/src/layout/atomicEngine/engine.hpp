@@ -46,13 +46,10 @@ private:
     if (node->GetType() == ElementType::TEXT) {
       auto *textNode = static_cast<ui::TextElement *>(node);
 
-      // Grab the active font handle currently cached inside the global UI
-      // Context
       ui::font::Font *activeFont =
           style.font ? reinterpret_cast<ui::font::Font *>(style.font)
                      : m_contextDefaultFont;
 
-      // Compute string layout dimensions directly from FreeType metrics bounds
       math::vec2<float> intrinsicSize =
           textNode->ComputeIntrinsicBounds(activeFont);
 
@@ -75,10 +72,8 @@ private:
     size_t childCount = node->GetChildren().size();
     size_t activeGaps = (childCount > 1) ? (childCount - 1) : 0;
 
-    // Calculate current padding bounds up front to bound internal budgets
-    // safely
-    float paddingX = style.padding.w + style.padding.y; // Left + Right
-    float paddingY = style.padding.x + style.padding.z; // Top + Bottom
+    float paddingX = style.padding.left + style.padding.right;
+    float paddingY = style.padding.top + style.padding.bottom;
 
     float currentBoundaryX = std::holds_alternative<float>(style.size.x)
                                  ? std::get<float>(style.size.x)
@@ -90,7 +85,7 @@ private:
     math::vec2<float> currentInnerCapacity = {
         std::max(0.0f, currentBoundaryX - paddingX),
         std::max(0.0f, currentBoundaryY - paddingY)};
-    // PASS 1: Calculate Total Fixed Main Budgets & Count Fill Elements
+
     float totalFixedMainAxis = 0.0f;
     size_t fillCountMainAxis = 0;
 
@@ -99,53 +94,47 @@ private:
       const auto &mainSize = isRow ? childStyle.size.x : childStyle.size.y;
 
       if (std::holds_alternative<float>(mainSize)) {
-        float marginTotal = isRow ? (childStyle.margin.w + childStyle.margin.y)
-                                  : (childStyle.margin.x + childStyle.margin.z);
+        float marginTotal =
+            isRow ? (childStyle.margin.left + childStyle.margin.right)
+                  : (childStyle.margin.top + childStyle.margin.bottom);
         totalFixedMainAxis += std::get<float>(mainSize) + marginTotal;
       } else if (std::holds_alternative<ui::SizeFill>(mainSize)) {
         fillCountMainAxis++;
       }
     }
 
-    // PASS 2: Calculate Main Axis Remainder and Cap Slices Safely
     float gapsMain = activeGaps * (isRow ? style.gap.x : style.gap.y);
     float innerMainCapacity =
         isRow ? currentInnerCapacity.x : currentInnerCapacity.y;
 
     float rawRemainingSpace = innerMainCapacity - totalFixedMainAxis - gapsMain;
-    float availableSpaceForFill =
-        std::max(0.0f, rawRemainingSpace); // capped to min of 0.0
+    float availableSpaceForFill = std::max(0.0f, rawRemainingSpace);
 
     float fillSlice = (fillCountMainAxis > 0)
                           ? (availableSpaceForFill / fillCountMainAxis)
                           : 0.0f;
 
-    // PASS 3: Deep Constrained Recursion Pass
     for (const auto &child : node->GetChildren()) {
       const auto &childStyle = child->GetStyle();
 
       math::vec2<float> childAllocationBudget;
 
-      // Resolve Width Constraint (X-Axis)
       if (std::holds_alternative<float>(childStyle.size.x)) {
         childAllocationBudget.x = std::get<float>(childStyle.size.x);
       } else if (std::holds_alternative<ui::SizeFill>(childStyle.size.x)) {
         childAllocationBudget.x = isRow ? fillSlice : currentInnerCapacity.x;
-      } else { // ui::SizeFit
+      } else {
         childAllocationBudget.x = currentInnerCapacity.x;
       }
 
-      // Resolve Height Constraint (Y-Axis)
       if (std::holds_alternative<float>(childStyle.size.y)) {
         childAllocationBudget.y = std::get<float>(childStyle.size.y);
       } else if (std::holds_alternative<ui::SizeFill>(childStyle.size.y)) {
         childAllocationBudget.y = !isRow ? fillSlice : currentInnerCapacity.y;
-      } else { // ui::SizeFit
+      } else {
         childAllocationBudget.y = currentInnerCapacity.y;
       }
 
-      // Enforce hard boundaries: elements can never receive a budget exceeding
-      // inner bounds
       childAllocationBudget.x =
           std::min(childAllocationBudget.x, currentInnerCapacity.x);
       childAllocationBudget.y =
@@ -154,7 +143,6 @@ private:
       ExecSizingPass(child.get(), childAllocationBudget);
     }
 
-    // PASS 4: Accumulate Child Bounds (Excluding Parent Padding)
     math::vec2<float> contentSize{0.0f, 0.0f};
 
     for (size_t i = 0; i < childCount; ++i) {
@@ -163,14 +151,16 @@ private:
       const auto &childStyle = child->GetStyle();
 
       float childWidthWithMargin = childMetrics.computed_size.x +
-                                   childStyle.margin.w + childStyle.margin.y;
+                                   childStyle.margin.left +
+                                   childStyle.margin.right;
       float childHeightWithMargin = childMetrics.computed_size.y +
-                                    childStyle.margin.x + childStyle.margin.z;
+                                    childStyle.margin.top +
+                                    childStyle.margin.bottom;
 
       if (isRow) {
         contentSize.x += childWidthWithMargin;
         contentSize.y = std::max(contentSize.y, childHeightWithMargin);
-      } else { // FlexDirection::Column
+      } else {
         contentSize.y += childHeightWithMargin;
         contentSize.x = std::max(contentSize.x, childWidthWithMargin);
       }
@@ -183,7 +173,6 @@ private:
         contentSize.y += gapsMain;
     }
 
-    // PASS 5: Resolve Node Final Sizing Metrics Outward
     auto resolveFinalMetric = [](const ui::Size &sizeVariant, float contentVal,
                                  float paddingTotal,
                                  float parentAlloc) -> float {
@@ -191,12 +180,8 @@ private:
         return std::get<float>(sizeVariant);
       }
       if (std::holds_alternative<ui::SizeFit>(sizeVariant)) {
-        // Content size already includes gaps and margins, add current node
-        // padding now
         return contentVal + paddingTotal;
       }
-      // SizeFill items are strictly clamped to the assigned parent allocation
-      // limit
       return parentAlloc;
     };
 
@@ -215,7 +200,7 @@ private:
 
     metrics.global_position = globalOrigin + metrics.local_position;
 
-    math::vec2<float> childCursorOffset{style.padding.w, style.padding.x};
+    math::vec2<float> childCursorOffset{style.padding.left, style.padding.top};
     bool isRow = (style.flexDirection == FlexDirection::Row);
 
     for (const auto &child : node->GetChildren()) {
@@ -223,19 +208,19 @@ private:
       const auto &childStyle = child->GetStyle();
 
       if (isRow) {
-        childCursorOffset.x += childStyle.margin.w; // Add Left Margin
+        childCursorOffset.x += childStyle.margin.left;
         childMetrics.local_position = {
-            childCursorOffset.x, childCursorOffset.y + childStyle.margin.x};
+            childCursorOffset.x, childCursorOffset.y + childStyle.margin.top};
 
-        childCursorOffset.x +=
-            childMetrics.computed_size.x + childStyle.margin.y + style.gap.x;
-      } else {                                      // FlexDirection::Column
-        childCursorOffset.y += childStyle.margin.x; // Add Top Margin
+        childCursorOffset.x += childMetrics.computed_size.x +
+                               childStyle.margin.right + style.gap.x;
+      } else {
+        childCursorOffset.y += childStyle.margin.top;
         childMetrics.local_position = {
-            childCursorOffset.x + childStyle.margin.w, childCursorOffset.y};
+            childCursorOffset.x + childStyle.margin.left, childCursorOffset.y};
 
-        childCursorOffset.y +=
-            childMetrics.computed_size.y + childStyle.margin.z + style.gap.y;
+        childCursorOffset.y += childMetrics.computed_size.y +
+                               childStyle.margin.bottom + style.gap.y;
       }
 
       ExecPositionPass(child.get(), metrics.global_position);
