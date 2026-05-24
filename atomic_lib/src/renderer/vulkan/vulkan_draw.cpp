@@ -1,7 +1,9 @@
+#include "SDL3/SDL_video.h"
 #include "renderer/font/freetype_layout.hpp"
 #include "renderer/font/interface.hpp"
 #include "renderer/style.hpp"
 #include "renderer/vulkan/vulkan_renderer.hpp"
+#include "windowing/interface.hpp"
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
@@ -44,11 +46,12 @@ void VulkanRenderer::add_circle(const math::vec2<float> &globalPosition,
 
 void VulkanRenderer::add_text(const math::vec2<float> &globalPosition,
                               const std::string &text,
-                              const ui::styleConfig *style) {
+                              const ui::styleConfig *style, float dpiScale) {
   if (!style) {
     printf("no font so not rendering");
     return;
   }
+
   ui::font::Font *activeFont = style->font
                                    ? static_cast<ui::font::Font *>(style->font)
                                    : m_default_font.get();
@@ -60,23 +63,30 @@ void VulkanRenderer::add_text(const math::vec2<float> &globalPosition,
     return;
   }
 
+  // Pure single-source-of-truth configuration pass passed explicitly from
+  // SDLWindow
+  float physicalFontSize = style->fontSize * dpiScale;
+  float physicalMaxWidth = style->maxWidth * dpiScale;
+  float physicalTracking = style->tracking * dpiScale;
+
   std::vector<font::TextRun> runs = font::TextLayoutEngine::parseRichText(
-      text, style->fontSize, style->color);
+      text, physicalFontSize, style->color);
 
   if (!runs.empty()) {
     runs[0].styleFlags = static_cast<uint8_t>(style->styleFlag);
   }
 
   std::vector<ui::font::PositionedGlyph> positionedGlyphs =
-      font::TextLayoutEngine::calcLayout(runs, activeFont, style->maxWidth,
-                                         style->tracking);
+      font::TextLayoutEngine::calcLayout(runs, activeFont, physicalMaxWidth,
+                                         physicalTracking);
 
-  float fontAscender = activeFont->getAscender();
+  // NOTE: If getAscender() inside your freetype_font layer already reflects the
+  // internal FreeType face metrics scaled by physicalFontSize, do not multiply
+  // by dpiScale again.
+  float fontAscender = activeFont->getAscender(physicalFontSize);
 
   for (const auto &pg : positionedGlyphs) {
     UIInstance instance{};
-    // Apply local glyph offsets relative to the parent element's global layout
-    // position
     instance.pos = {globalPosition.x + pg.rect.x,
                     globalPosition.y + fontAscender + pg.rect.y};
     instance.size = {pg.rect.z, pg.rect.w};
@@ -86,7 +96,6 @@ void VulkanRenderer::add_text(const math::vec2<float> &globalPosition,
     instance.uvMin = {pg.uv.x, pg.uv.y};
     instance.uvMax = {pg.uv.z, pg.uv.w};
 
-    // HACK: repurposing stroke width to font weight offset is not ideal
     instance.strokeWidth = pg.fontWeightOffset;
 
     m_ui_queue.push_back(instance);

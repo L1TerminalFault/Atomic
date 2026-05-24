@@ -1,4 +1,5 @@
 #include "renderer/font/freetype_font.hpp"
+#include <cmath>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include <algorithm>
@@ -9,7 +10,6 @@
 
 namespace ui::font {
 
-// Define and initialize static member variable boundaries safely
 bool FreeTypeFont::s_libInited = false;
 FT_Library FreeTypeFont::s_library = nullptr;
 
@@ -32,31 +32,45 @@ bool FreeTypeFont::load(const std::string &path, uint32_t size) {
     throw std::runtime_error("Failed to load font file at path: " + path);
   }
 
-  // Set default pixel dimensions matching configuration
-  FT_Set_Pixel_Sizes(m_face, 0, size);
+  m_initialSize = size;
 
-  // FreeType uses 26.6 fixed-point numbers for dimensions (1/64th of a pixel)
-  m_lineHeight = static_cast<float>(m_face->size->metrics.height) / 64.0f;
-  m_ascender = static_cast<float>(m_face->size->metrics.ascender) / 64.0f;
-
-  // Initialize flat single-channel (R8) pixel tracking array canvas
   m_atlasPixels.assign(m_atlasWidth * m_atlasHeight, 0);
 
-  // Setup basic row-packing pen coordinates with 2px padding margins
   m_nextPackX = 2;
   m_nextPackY = 2;
   m_maxRowHeight = 0;
   m_textureDirty = true;
 
-  // Warm up the glyph cache cache with printable ASCII range immediately
+  // Warm up the glyph cache using the runtime configuration font size converted
+  // to float
   generateAtlas();
 
   return true;
 }
 
-GlyphInfo FreeTypeFont::getGlyphVariant(char32_t codepoint, uint32_t size,
+// ----------------------------------------------------------------------
+// Dynamic Metric Lookups
+// ----------------------------------------------------------------------
+float FreeTypeFont::getLineHeight(float size) const {
+  FT_F26Dot6 fixedSize = static_cast<FT_F26Dot6>(std::round(size * 64.0f));
+  FT_Set_Char_Size(const_cast<FT_Face>(m_face), 0, fixedSize, 72, 72);
+
+  return static_cast<float>(m_face->size->metrics.height) / 64.0f;
+}
+
+float FreeTypeFont::getAscender(float size) const {
+  FT_F26Dot6 fixedSize = static_cast<FT_F26Dot6>(std::round(size * 64.0f));
+  FT_Set_Char_Size(const_cast<FT_Face>(m_face), 0, fixedSize, 72, 72);
+
+  return static_cast<float>(m_face->size->metrics.ascender) / 64.0f;
+}
+
+GlyphInfo FreeTypeFont::getGlyphVariant(char32_t codepoint, float size,
                                         uint8_t styleFlags) {
-  GlyphKey key{codepoint, size, styleFlags};
+  // Quantize incoming subpixel float size into stable 26.6 representation for
+  // cache lookup
+  int32_t fixedSize = static_cast<int32_t>(std::round(size * 64.0f));
+  GlyphKey key{codepoint, fixedSize, styleFlags};
 
   auto it = m_glyphCache.find(key);
   if (it != m_glyphCache.end()) {
@@ -66,13 +80,13 @@ GlyphInfo FreeTypeFont::getGlyphVariant(char32_t codepoint, uint32_t size,
   return rasterizeAndPackGlyph(codepoint, size, styleFlags);
 }
 
-GlyphInfo FreeTypeFont::rasterizeAndPackGlyph(char32_t codepoint, uint32_t size,
+GlyphInfo FreeTypeFont::rasterizeAndPackGlyph(char32_t codepoint, float size,
                                               uint8_t styleFlags) {
-  // Ensure the internal FreeType font face state is targeting the correct size
-  FT_Set_Pixel_Sizes(m_face, 0, size);
+  // Set subpixel dimensions natively in FreeType to safely retrieve clean
+  // layout metrics
+  FT_F26Dot6 fixedSize = static_cast<FT_F26Dot6>(std::round(size * 64.0f));
+  FT_Set_Char_Size(m_face, 0, fixedSize, 72, 72);
 
-  // Trigger rasterizer to populate m_face->glyph->bitmap with a single-channel
-  // alpha mask
   if (FT_Load_Char(m_face, codepoint, FT_LOAD_RENDER) != 0) {
     throw std::runtime_error(
         "Failed to render glyph character via FreeType context!");
@@ -82,15 +96,12 @@ GlyphInfo FreeTypeFont::rasterizeAndPackGlyph(char32_t codepoint, uint32_t size,
   uint32_t glyphWidth = bitmap.width;
   uint32_t glyphRows = bitmap.rows;
 
-  // Shelf packing strategy: if we exceed row limits, drop down to the next text
-  // line
   if (m_nextPackX + glyphWidth + 2 >= m_atlasWidth) {
     m_nextPackX = 2;
     m_nextPackY += m_maxRowHeight + 2;
     m_maxRowHeight = 0;
   }
 
-  // Safeguard against absolute texture sheet limits
   if (m_nextPackY + glyphRows + 2 >= m_atlasHeight) {
     throw std::runtime_error(
         "Vulkan UI Error: Font Atlas texture filled to maximum dimensions!");
@@ -98,8 +109,6 @@ GlyphInfo FreeTypeFont::rasterizeAndPackGlyph(char32_t codepoint, uint32_t size,
 
   m_maxRowHeight = std::max(m_maxRowHeight, glyphRows);
 
-  // Blit FreeType's raw grayscale buffer pixels into our local linear atlas
-  // canvas sheet
   for (uint32_t row = 0; row < glyphRows; ++row) {
     uint32_t destY = m_nextPackY + row;
     uint32_t destX = m_nextPackX;
@@ -108,8 +117,6 @@ GlyphInfo FreeTypeFont::rasterizeAndPackGlyph(char32_t codepoint, uint32_t size,
                 &bitmap.buffer[row * bitmap.width], glyphWidth);
   }
 
-  // Generate normalized UV coordinates maps matching shader vertex
-  // interpolations
   GlyphInfo info{};
   info.uvMin = {
       static_cast<float>(m_nextPackX) / static_cast<float>(m_atlasWidth),
@@ -119,20 +126,18 @@ GlyphInfo FreeTypeFont::rasterizeAndPackGlyph(char32_t codepoint, uint32_t size,
                 static_cast<float>(m_nextPackY + glyphRows) /
                     static_cast<float>(m_atlasHeight)};
 
-  // Extract dimensions and structural metrics to pass out to TextLayoutEngine
   info.size = {static_cast<float>(glyphWidth), static_cast<float>(glyphRows)};
   info.bearing = {static_cast<float>(m_face->glyph->bitmap_left),
                   static_cast<float>(m_face->glyph->bitmap_top)};
-  info.advanceX =
-      static_cast<float>(m_face->glyph->advance.x >>
-                         6); // Transform 26.6 to standard pixel offsets
 
-  // Store inside lookup map layout
-  GlyphKey key{codepoint, size, styleFlags};
+  // Extract sub-pixel text advance width from the 16.16 fixed-point metrics
+  // slot
+  info.advanceX = static_cast<float>(m_face->glyph->advance.x) / 64.0f;
+
+  // Key matching the exact structure declaration using fixed size
+  GlyphKey key{codepoint, static_cast<int32_t>(fixedSize), styleFlags};
   m_glyphCache[key] = info;
 
-  // Advance packing cursor rightward, including safe 2px spacing to prevent
-  // texel bleeding
   m_nextPackX += glyphWidth + 2;
   m_textureDirty = true;
 
@@ -146,10 +151,11 @@ bool FreeTypeFont::consumeTextureDirtyBit() {
 }
 
 void FreeTypeFont::generateAtlas() {
-  // Populate our lookup tables with the basic ASCII character space on initial
-  // load
+  // Convert physical configuration baseline size cleanly to launch
+  // configuration warmup sequence
+  float baseWarmupSize = static_cast<float>(m_initialSize);
   for (char c = 32; c < 127; ++c) {
-    rasterizeAndPackGlyph(static_cast<char32_t>(c), 24, 0);
+    rasterizeAndPackGlyph(static_cast<char32_t>(c), baseWarmupSize, 0);
   }
 }
 

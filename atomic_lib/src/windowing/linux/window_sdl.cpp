@@ -54,17 +54,42 @@ void SDLWindow::render() {
   if (!m_renderer || !m_layoutEngine)
     return;
 
+  int drawableW = 0, drawableH = 0;
+  SDL_GetWindowSizeInPixels(m_window, &drawableW, &drawableH);
+
+  int logicalW = 0, logicalH = 0;
+  SDL_GetWindowSize(m_window, &logicalW, &logicalH);
+
+  m_width = logicalW;
+  m_height = logicalH;
+
+  float dpiScale = 1.0f;
+  if (logicalW > 0) {
+    dpiScale = static_cast<float>(drawableW) / static_cast<float>(logicalW);
+  }
+
   if (m_rootNode) {
-    math::vec2<float> surfaceDimensions{static_cast<float>(m_width),
-                                        static_cast<float>(m_height)};
+    // 1. Force the root style dimensions to track the updated window
+    // constraints This updates the top level canvas boundary cleanly without
+    // needing UI state machinery.
+    auto &rootStyle = const_cast<ui::styleConfig &>(m_rootNode->GetStyle());
+
+    // We pass logical sizes here because ExecSizingPass multiplies them by
+    // dpiScale internally!
+    rootStyle.size.x = static_cast<float>(logicalW);
+    rootStyle.size.y = static_cast<float>(logicalH);
+
+    // 2. Run the processing passes with absolute physical pixel targets
+    math::vec2<float> surfaceDimensions{static_cast<float>(drawableW),
+                                        static_cast<float>(drawableH)};
+
     m_layoutEngine->ProcessLayout(m_rootNode.get(), surfaceDimensions,
-                                  m_renderer->get_default_font());
+                                  m_renderer->get_default_font(), dpiScale);
   }
 
   m_renderer->begin_frame();
 
   const auto &processQueue = m_layoutEngine->GetRenderCache();
-
   for (const auto *node : processQueue) {
     const auto &metrics = node->GetLayoutMetrics();
     const ui::styleConfig *style = &node->GetStyle();
@@ -77,7 +102,8 @@ void SDLWindow::render() {
 
     case ElementType::TEXT: {
       const auto *textNode = static_cast<const TextElement *>(node);
-      m_renderer->add_text(metrics.global_position, textNode->GetText(), style);
+      m_renderer->add_text(metrics.global_position, textNode->GetText(), style,
+                           dpiScale);
       break;
     }
     default:
@@ -99,21 +125,34 @@ void SDLWindow::poll_events() {
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
       m_should_close = true;
       break;
+
+    // Catch both standard resizes and OS/Tiling manager physical changes
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_RESIZED: {
-      int w, h;
-      SDL_GetWindowSize(m_window, &w, &h);
-      m_width = w;
-      m_height = h;
+      int pixelW = 0, pixelH = 0;
+      int logicalW = 0, logicalH = 0;
+
+      // 1. Get true physical footprint for Vulkan swapchain recreation
+      SDL_GetWindowSizeInPixels(m_window, &pixelW, &pixelH);
+
+      // 2. Get logical size to keep cached window metrics synced
+      SDL_GetWindowSize(m_window, &logicalW, &logicalH);
+
+      m_width = logicalW;
+      m_height = logicalH;
 
       if (m_renderer) {
-        m_renderer->on_resize(w, h);
+        // Pass the physical pixel sizing through to destroy/recreate the
+        // VkSwapchainKHR
+        m_renderer->on_resize(pixelW, pixelH);
       }
       break;
     }
+    default:
+      break;
     }
   }
 }
-
 void SDLWindow::swap_buffers() {}
 
 } // namespace ui

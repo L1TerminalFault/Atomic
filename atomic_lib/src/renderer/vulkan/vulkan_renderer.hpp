@@ -65,7 +65,8 @@ public:
   void add_circle(const math::vec2<float> &globalPosition, float radius,
                   ui::styleConfig *style) override;
   void add_text(const math::vec2<float> &globalPosition,
-                const std::string &text, const ui::styleConfig *style) override;
+                const std::string &text, const ui::styleConfig *style,
+                float dpiScale) override;
   void add_image(const math::vec2<float> &globalPosition,
                  const math::vec2<float> &computedSize, const std::string &path,
                  const ui::styleConfig *style) override;

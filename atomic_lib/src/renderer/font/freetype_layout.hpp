@@ -1,6 +1,7 @@
 #pragma once
 #include "math/vec.hpp"
 #include "renderer/font/interface.hpp"
+#include <algorithm> // Required for std::max
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -9,16 +10,19 @@ namespace ui::font {
 
 class TextLayoutEngine {
 public:
-  static std::vector<TextRun> parseRichText(const std::string &rawText,
-                                            uint32_t defaultSize,
-                                            math::vec4<float> defaultColor) {
+  static std::vector<TextRun>
+  parseRichText(const std::string &rawText,
+                float defaultSize, // Changed to float
+                math::vec4<float> defaultColor) {
     std::vector<TextRun> runs;
     runs.push_back({rawText, defaultSize,
                     static_cast<uint8_t>(TextStyleBit::Regular), defaultColor});
     return runs;
   }
+
   static math::vec2<float> measureString(const std::string &text,
-                                         Font *fontBackend, uint32_t fontSize,
+                                         Font *fontBackend,
+                                         float fontSize, // Changed to float
                                          float maxWidth, float tracking,
                                          float lineSpacingScale = 1.0f) {
     if (!fontBackend || text.empty()) {
@@ -29,7 +33,7 @@ public:
     float cursorY = 0.0f;
     float maxLineWidth = 0.0f;
 
-    float lineHeight = fontBackend->getLineHeight() * lineSpacingScale;
+    float lineHeight = fontBackend->getLineHeight(fontSize) * lineSpacingScale;
 
     // Initial height is at least one line if text exists
     float currentHeight = lineHeight;
@@ -45,7 +49,7 @@ public:
         continue;
       }
 
-      // We pass styleFlags = 0 (Regular Style) for generic measurements
+      // Pass styleFlags = 0 (Regular Style) for generic measurements
       GlyphInfo glyphinfo = fontBackend->getGlyphVariant(c, fontSize, 0);
 
       // Simple word wrapping boundary test
@@ -73,17 +77,20 @@ public:
     float lastWordBreakX = 0.0f;
 
     for (const auto &run : textRuns) {
-
       float weightOffset =
           (run.styleFlags & static_cast<uint8_t>(TextStyleBit::Bold)) ? 0.15f
                                                                       : 0.0f;
+
+      // Cache the line height for this specific rich text run segment
+      float currentLineHeight =
+          fontBackend->getLineHeight(run.fontSize) * lineSpacingScale;
 
       for (size_t i = 0; i < run.text.size(); ++i) {
         char c = run.text[i];
 
         if (c == '\n') {
           cursorX = 0.0f;
-          cursorY += fontBackend->getLineHeight() * lineSpacingScale;
+          cursorY += currentLineHeight;
           continue;
         }
 
@@ -103,7 +110,7 @@ public:
         if (maxWidth > 0.0f && (cursorX + glyphinfo.advanceX) > maxWidth) {
           if (lastWordBreakX > 0.0f) {
             float shiftx = lastWordBreakX;
-            float shifty = fontBackend->getLineHeight() * lineSpacingScale;
+            float shifty = currentLineHeight;
 
             for (size_t j = lastWordBreakIndex; j < layoutGlyphs.size(); ++j) {
               layoutGlyphs[j].rect.x -= shiftx;
@@ -117,7 +124,7 @@ public:
             yPos = cursorY - glyphinfo.bearing.y;
           } else {
             cursorX = 0.0f;
-            cursorY += fontBackend->getLineHeight() * lineSpacingScale;
+            cursorY += currentLineHeight;
             xPos = cursorX + glyphinfo.bearing.x;
             yPos = cursorY - glyphinfo.bearing.y;
           }

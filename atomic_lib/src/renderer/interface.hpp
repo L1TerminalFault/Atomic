@@ -17,8 +17,8 @@ public:
   virtual void add_circle(const math::vec2<float> &globalPosition, float radius,
                           ui::styleConfig *style) = 0;
   virtual void add_text(const math::vec2<float> &globalPosition,
-                        const std::string &text,
-                        const ui::styleConfig *style) = 0;
+                        const std::string &text, const ui::styleConfig *style,
+                        float dpiScale) = 0;
   virtual void add_image(const math::vec2<float> &globalPosition,
                          const math::vec2<float> &computedSize,
                          const std::string &path,

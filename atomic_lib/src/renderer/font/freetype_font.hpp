@@ -12,6 +12,8 @@ private:
   FT_Face m_face = nullptr;
   static FT_Library s_library;
   static bool s_libInited;
+
+  // Cache uses the newly quantized fixed-point GlyphKey struct
   std::unordered_map<GlyphKey, GlyphInfo> m_glyphCache;
   void *m_vulkanTextureHandle = nullptr;
 
@@ -21,12 +23,15 @@ private:
   std::vector<uint8_t> m_atlasPixels;
   uint32_t m_atlasWidth = 1024;
   uint32_t m_atlasHeight = 1024;
-  float m_nextPackX;
-  float m_nextPackY;
+
+  // Coordinates kept at uint32_t to cleanly track physical atlas slot offsets
+  uint32_t m_nextPackX;
+  uint32_t m_nextPackY;
   uint32_t m_maxRowHeight;
-  float m_textureDirty;
+  bool m_textureDirty; // Fixed standard type signature from float to bool
 
   void generateAtlas();
+  uint32_t m_initialSize{24};
 
 public:
   static bool initFreeType();
@@ -36,17 +41,24 @@ public:
       FT_Done_Face(m_face);
     }
   }
+
   bool consumeTextureDirtyBit();
   bool load(const std::string &path, uint32_t size) override;
-  GlyphInfo getGlyphVariant(char32_t codepoint, uint32_t size,
+
+  // Signatures cleanly updated to match Font virtual interface overrides
+  GlyphInfo getGlyphVariant(char32_t codepoint, float size,
                             uint8_t styleFlags) override;
-  float getLineHeight() const override { return m_lineHeight; };
-  float getAscender() const override { return m_ascender; };
+
+  float getLineHeight(float size) const override;
+  float getAscender(float size) const override;
+
   const uint8_t *getRawPixels() const { return m_atlasPixels.data(); }
   uint32_t getAtlasWidth() const { return m_atlasWidth; }
   uint32_t getAtlasHeight() const { return m_atlasHeight; }
   void *getTextureHandle() override { return m_vulkanTextureHandle; };
-  GlyphInfo rasterizeAndPackGlyph(char32_t codepoint, uint32_t size,
+
+  // Match implementation signatures to take float sizes
+  GlyphInfo rasterizeAndPackGlyph(char32_t codepoint, float size,
                                   uint8_t styleFlags);
 };
 } // namespace ui::font

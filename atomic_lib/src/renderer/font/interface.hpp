@@ -15,7 +15,7 @@ enum class TextStyleBit : uint8_t {
 
 struct TextRun {
   std::string text;
-  uint32_t fontSize;
+  float fontSize; // Changed to float for rich text sub-pixel tracking
   uint8_t styleFlags;
   math::vec4<float> color;
 };
@@ -28,14 +28,17 @@ struct PositionedGlyph {
   float fontWeightOffset;
 };
 
+// Fixed-point quantization prevents float rounding variations from spawning
+// duplicate keys
 struct GlyphKey {
   char32_t codepoint;
-  uint32_t fontSize;
-  uint32_t fontWeight;
+  int32_t fixedSize;  // Font size scaled by 64.0f and converted to 26.6
+                      // fixed-point representation
+  uint8_t styleFlags; // Re-aligned with TextRun and implementation naming
 
   bool operator==(const GlyphKey &o) const {
-    return codepoint == o.codepoint && fontSize == o.fontSize &&
-           fontWeight == o.fontWeight;
+    return codepoint == o.codepoint && fixedSize == o.fixedSize &&
+           styleFlags == o.styleFlags;
   }
 };
 
@@ -51,11 +54,14 @@ class Font {
 public:
   virtual ~Font() = default;
   virtual bool load(const std::string &path, uint32_t size) = 0;
-  virtual GlyphInfo getGlyphVariant(char32_t codepoint, uint32_t size,
+
+  // Accept float size directly to pass smooth metrics down to FreeType point
+  // functions
+  virtual GlyphInfo getGlyphVariant(char32_t codepoint, float size,
                                     uint8_t styleFlags) = 0;
 
-  virtual float getLineHeight() const = 0;
-  virtual float getAscender() const = 0;
+  virtual float getLineHeight(float size) const = 0;
+  virtual float getAscender(float size) const = 0;
 
   virtual void *getTextureHandle() = 0;
 };
@@ -64,10 +70,13 @@ public:
 namespace std {
 template <> struct hash<ui::font::GlyphKey> {
   size_t operator()(const ui::font::GlyphKey &k) const {
-    return ((hash<uint32_t>()(k.codepoint) ^
-             (hash<uint32_t>()(k.fontSize) << 1)) >>
-            1) ^
-           (hash<uint32_t>()(k.fontWeight) << 1);
+    // Robust mixing for 26.6 keys to cleanly isolate codepoint maps across
+    // sizes
+    size_t h1 = hash<uint32_t>()(k.codepoint);
+    size_t h2 = hash<int32_t>()(k.fixedSize);
+    size_t h3 = hash<uint8_t>()(k.styleFlags);
+
+    return h1 ^ (h2 << 1) ^ (h3 << 2);
   }
 };
 } // namespace std

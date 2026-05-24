@@ -15,11 +15,14 @@ public:
   ~AtomicEngine() = default;
 
   void ProcessLayout(IElement *rootNode, const math::vec2<float> &canvasBounds,
-                     ui::font::Font *defaultFont) {
+                     ui::font::Font *defaultFont, float dpiScale = 1.0f) {
     if (!rootNode)
       return;
 
     m_contextDefaultFont = defaultFont;
+    m_globalDpiScale =
+        dpiScale; // Keep track of physical-to-logical ratio globally
+
     ExecSizingPass(rootNode, canvasBounds);
 
     math::vec2<float> rootStartingPosition = rootNode->GetStyle().pos;
@@ -35,6 +38,8 @@ public:
 
 private:
   ui::font::Font *m_contextDefaultFont;
+  float m_globalDpiScale = 1.0f;
+
   void ExecSizingPass(IElement *node,
                       const math::vec2<float> &parentAllocation) {
     if (!node)
@@ -43,49 +48,76 @@ private:
     const ui::styleConfig &style = node->GetStyle();
     LayoutAccumulation &metrics = node->GetLayoutMetrics();
 
+    // Leaf nodes (Text layout evaluation)
+    // Leaf nodes (Text layout evaluation)
     if (node->GetType() == ElementType::TEXT) {
       auto *textNode = static_cast<ui::TextElement *>(node);
-
       ui::font::Font *activeFont =
           style.font ? reinterpret_cast<ui::font::Font *>(style.font)
                      : m_contextDefaultFont;
 
-      math::vec2<float> intrinsicSize =
-          textNode->ComputeIntrinsicBounds(activeFont);
+      // Scale font size parameter inline before running atlas glyph queries
+      float scaledFontSize = style.fontSize * m_globalDpiScale;
+
+      // FIX: Pass m_globalDpiScale here so internal max-width limits scale
+      // matching the font
+      math::vec2<float> intrinsicSize = textNode->ComputeIntrinsicBounds(
+          activeFont, scaledFontSize, m_globalDpiScale);
 
       if (std::holds_alternative<ui::SizeFit>(style.size.x)) {
         metrics.computed_size.x = intrinsicSize.x;
       } else if (std::holds_alternative<float>(style.size.x)) {
-        metrics.computed_size.x = std::get<float>(style.size.x);
+        metrics.computed_size.x =
+            std::get<float>(style.size.x) * m_globalDpiScale;
       }
 
       if (std::holds_alternative<ui::SizeFit>(style.size.y)) {
         metrics.computed_size.y = intrinsicSize.y;
       } else if (std::holds_alternative<float>(style.size.y)) {
-        metrics.computed_size.y = std::get<float>(style.size.y);
+        metrics.computed_size.y =
+            std::get<float>(style.size.y) * m_globalDpiScale;
       }
-
       return;
     }
-
     bool isRow = (style.flexDirection == FlexDirection::Row);
     size_t childCount = node->GetChildren().size();
     size_t activeGaps = (childCount > 1) ? (childCount - 1) : 0;
 
-    float paddingX = style.padding.left + style.padding.right;
-    float paddingY = style.padding.top + style.padding.bottom;
+    // Scale padding measurements up to physical pixels
+    float paddingX =
+        (style.padding.left + style.padding.right) * m_globalDpiScale;
+    float paddingY =
+        (style.padding.top + style.padding.bottom) * m_globalDpiScale;
 
-    float currentBoundaryX = std::holds_alternative<float>(style.size.x)
-                                 ? std::get<float>(style.size.x)
-                                 : parentAllocation.x;
-    float currentBoundaryY = std::holds_alternative<float>(style.size.y)
-                                 ? std::get<float>(style.size.y)
-                                 : parentAllocation.y;
+    float currentBoundaryX =
+        std::holds_alternative<float>(style.size.x)
+            ? (std::get<float>(style.size.x) * m_globalDpiScale)
+            : parentAllocation.x;
+    float currentBoundaryY =
+        std::holds_alternative<float>(style.size.y)
+            ? (std::get<float>(style.size.y) * m_globalDpiScale)
+            : parentAllocation.y;
 
     math::vec2<float> currentInnerCapacity = {
         std::max(0.0f, currentBoundaryX - paddingX),
         std::max(0.0f, currentBoundaryY - paddingY)};
 
+    // =================================================================
+    // PASS 1A: Pre-Pass (Resolve SizeFit nodes first)
+    // =================================================================
+    for (const auto &child : node->GetChildren()) {
+      const auto &childStyle = child->GetStyle();
+      const auto &mainSize = isRow ? childStyle.size.x : childStyle.size.y;
+
+      if (std::holds_alternative<ui::SizeFit>(mainSize)) {
+        math::vec2<float> fitBudget = currentInnerCapacity;
+        ExecSizingPass(child.get(), fitBudget);
+      }
+    }
+
+    // =================================================================
+    // PASS 1B: Main-Axis Space Evaluation & Accumulation
+    // =================================================================
     float totalFixedMainAxis = 0.0f;
     size_t fillCountMainAxis = 0;
 
@@ -93,17 +125,28 @@ private:
       const auto &childStyle = child->GetStyle();
       const auto &mainSize = isRow ? childStyle.size.x : childStyle.size.y;
 
+      // Scale up margins dynamically
+      float marginTotal =
+          isRow ? (childStyle.margin.left + childStyle.margin.right)
+                : (childStyle.margin.top + childStyle.margin.bottom);
+      marginTotal *= m_globalDpiScale;
+
       if (std::holds_alternative<float>(mainSize)) {
-        float marginTotal =
-            isRow ? (childStyle.margin.left + childStyle.margin.right)
-                  : (childStyle.margin.top + childStyle.margin.bottom);
-        totalFixedMainAxis += std::get<float>(mainSize) + marginTotal;
+        totalFixedMainAxis +=
+            (std::get<float>(mainSize) * m_globalDpiScale) + marginTotal;
+      } else if (std::holds_alternative<ui::SizeFit>(mainSize)) {
+        float resolvedMain = isRow ? child->GetLayoutMetrics().computed_size.x
+                                   : child->GetLayoutMetrics().computed_size.y;
+        totalFixedMainAxis += resolvedMain + marginTotal;
       } else if (std::holds_alternative<ui::SizeFill>(mainSize)) {
+        totalFixedMainAxis += marginTotal;
         fillCountMainAxis++;
       }
     }
 
-    float gapsMain = activeGaps * (isRow ? style.gap.x : style.gap.y);
+    // Scale layout step gaps
+    float gapsMain =
+        activeGaps * (isRow ? style.gap.x : style.gap.y) * m_globalDpiScale;
     float innerMainCapacity =
         isRow ? currentInnerCapacity.x : currentInnerCapacity.y;
 
@@ -114,21 +157,32 @@ private:
                           ? (availableSpaceForFill / fillCountMainAxis)
                           : 0.0f;
 
+    // =================================================================
+    // PASS 2 & 3: Budget Determination & Deep Child Recursion
+    // =================================================================
     for (const auto &child : node->GetChildren()) {
       const auto &childStyle = child->GetStyle();
+      const auto &mainSize = isRow ? childStyle.size.x : childStyle.size.y;
+
+      if (std::holds_alternative<ui::SizeFit>(mainSize))
+        continue;
 
       math::vec2<float> childAllocationBudget;
 
+      // Handle X-Axis
       if (std::holds_alternative<float>(childStyle.size.x)) {
-        childAllocationBudget.x = std::get<float>(childStyle.size.x);
+        childAllocationBudget.x =
+            std::get<float>(childStyle.size.x) * m_globalDpiScale;
       } else if (std::holds_alternative<ui::SizeFill>(childStyle.size.x)) {
         childAllocationBudget.x = isRow ? fillSlice : currentInnerCapacity.x;
       } else {
         childAllocationBudget.x = currentInnerCapacity.x;
       }
 
+      // Handle Y-Axis
       if (std::holds_alternative<float>(childStyle.size.y)) {
-        childAllocationBudget.y = std::get<float>(childStyle.size.y);
+        childAllocationBudget.y =
+            std::get<float>(childStyle.size.y) * m_globalDpiScale;
       } else if (std::holds_alternative<ui::SizeFill>(childStyle.size.y)) {
         childAllocationBudget.y = !isRow ? fillSlice : currentInnerCapacity.y;
       } else {
@@ -143,6 +197,9 @@ private:
       ExecSizingPass(child.get(), childAllocationBudget);
     }
 
+    // =================================================================
+    // PASS 4 & 5: Accumulate Outward & Resolve Metrics
+    // =================================================================
     math::vec2<float> contentSize{0.0f, 0.0f};
 
     for (size_t i = 0; i < childCount; ++i) {
@@ -150,12 +207,14 @@ private:
       const auto &childMetrics = child->GetLayoutMetrics();
       const auto &childStyle = child->GetStyle();
 
-      float childWidthWithMargin = childMetrics.computed_size.x +
-                                   childStyle.margin.left +
-                                   childStyle.margin.right;
-      float childHeightWithMargin = childMetrics.computed_size.y +
-                                    childStyle.margin.top +
-                                    childStyle.margin.bottom;
+      float childWidthWithMargin =
+          childMetrics.computed_size.x +
+          ((childStyle.margin.left + childStyle.margin.right) *
+           m_globalDpiScale);
+      float childHeightWithMargin =
+          childMetrics.computed_size.y +
+          ((childStyle.margin.top + childStyle.margin.bottom) *
+           m_globalDpiScale);
 
       if (isRow) {
         contentSize.x += childWidthWithMargin;
@@ -173,11 +232,11 @@ private:
         contentSize.y += gapsMain;
     }
 
-    auto resolveFinalMetric = [](const ui::Size &sizeVariant, float contentVal,
-                                 float paddingTotal,
-                                 float parentAlloc) -> float {
+    auto resolveFinalMetric =
+        [this, &style](const ui::Size &sizeVariant, float contentVal,
+                       float paddingTotal, float parentAlloc) -> float {
       if (std::holds_alternative<float>(sizeVariant)) {
-        return std::get<float>(sizeVariant);
+        return std::get<float>(sizeVariant) * m_globalDpiScale;
       }
       if (std::holds_alternative<ui::SizeFit>(sizeVariant)) {
         return contentVal + paddingTotal;
@@ -200,7 +259,8 @@ private:
 
     metrics.global_position = globalOrigin + metrics.local_position;
 
-    math::vec2<float> childCursorOffset{style.padding.left, style.padding.top};
+    math::vec2<float> childCursorOffset{style.padding.left * m_globalDpiScale,
+                                        style.padding.top * m_globalDpiScale};
     bool isRow = (style.flexDirection == FlexDirection::Row);
 
     for (const auto &child : node->GetChildren()) {
@@ -208,19 +268,23 @@ private:
       const auto &childStyle = child->GetStyle();
 
       if (isRow) {
-        childCursorOffset.x += childStyle.margin.left;
+        childCursorOffset.x += childStyle.margin.left * m_globalDpiScale;
         childMetrics.local_position = {
-            childCursorOffset.x, childCursorOffset.y + childStyle.margin.top};
+            childCursorOffset.x,
+            childCursorOffset.y + (childStyle.margin.top * m_globalDpiScale)};
 
-        childCursorOffset.x += childMetrics.computed_size.x +
-                               childStyle.margin.right + style.gap.x;
+        childCursorOffset.x +=
+            childMetrics.computed_size.x +
+            ((childStyle.margin.right + style.gap.x) * m_globalDpiScale);
       } else {
-        childCursorOffset.y += childStyle.margin.top;
+        childCursorOffset.y += childStyle.margin.top * m_globalDpiScale;
         childMetrics.local_position = {
-            childCursorOffset.x + childStyle.margin.left, childCursorOffset.y};
+            childCursorOffset.x + (childStyle.margin.left * m_globalDpiScale),
+            childCursorOffset.y};
 
-        childCursorOffset.y += childMetrics.computed_size.y +
-                               childStyle.margin.bottom + style.gap.y;
+        childCursorOffset.y +=
+            childMetrics.computed_size.y +
+            ((childStyle.margin.bottom + style.gap.y) * m_globalDpiScale);
       }
 
       ExecPositionPass(child.get(), metrics.global_position);

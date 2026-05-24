@@ -98,7 +98,7 @@ struct styleConfig {
   CornerRadius radius;
   ShapeType shape = ShapeType::RoundedRect;
 
-  float strokeWidth = 1.0f;
+  float strokeWidth = 0.0f;
   math::vec4<float> strokeColor{0.3f, 0.3f, 0.3f, 1.0f};
   float dotGap = 0.0f;
   float dotSize = 0.0f;

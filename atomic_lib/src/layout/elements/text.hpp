@@ -41,16 +41,18 @@ public:
   const std::string &GetText() const { return m_textContent; }
   void SetText(std::string text) { m_textContent = std::move(text); }
   // Add this inside public: block of TextElement (layout/elements/text.hpp)
-  math::vec2<float> ComputeIntrinsicBounds(ui::font::Font *activeFont) const {
-    if (!activeFont) {
-      return {0.0f, 0.0f};
-    }
+  // In layout/elements/text.hpp (or text.cpp)
+  math::vec2<float> ComputeIntrinsicBounds(ui::font::Font *activeFont,
+                                           float physicalFontSize,
+                                           float dpiScale) const {
+    // Scale your max width constraint up to physical pixels to match physical
+    // font sizing
+    float physicalMaxWidth = m_style.maxWidth * dpiScale;
+    float physicalTracking = m_style.tracking * dpiScale;
 
-    // Just pass the float straight through. If it's 0.0f, calcLayout handles it
-    // as infinity.
     return font::TextLayoutEngine::measureString(
-        m_textContent, activeFont, m_style.fontSize, m_style.maxWidth,
-        m_style.tracking);
+        m_textContent, activeFont, physicalFontSize, physicalMaxWidth,
+        physicalTracking);
   }
 
 private:
