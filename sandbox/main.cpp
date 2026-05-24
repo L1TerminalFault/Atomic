@@ -1,60 +1,37 @@
 #include "layout/elements/div.hpp"
+#include "layout/elements/text.hpp"
+#include "math/vec.hpp"
+#include "renderer/style.hpp"
 #include "windowing/interface.hpp"
 #include "windowing/linux/window_sdl.hpp"
 #include <cstdlib>
 #include <iostream>
-#include <memory>
+
+using namespace ui;
 
 int main() {
   try {
-    ui::WindowConfig config{"Atomic Flow Engine Test", 1200, 720, 100, 100};
+    ui::WindowConfig config{"Test 1: Complex Nested Flows", 1200, 720, 100,
+                            100};
     auto window = ui::SDLWindow::Create(config);
 
-    auto rootDiv = std::make_unique<ui::DivElement>();
-    ui::styleConfig rootStyle{};
-    rootStyle.pos = {20.0f, 20.0f};
-    rootStyle.size = {1160.0f, 680.0f};
-    rootStyle.color = {0.11f, 0.12f, 0.13f, 1.0f};
+    auto rootdiv = Div(
+        {
+            .pos = {200.0f, 200.0f},
+            .size = {ui::SizeFit{}, ui::SizeFit{}},
+            .color = {0.15f, 0.15f, 0.18f, 1.0f},
+            .radius = math::vec4<float>::all(10),
+            .padding = {20.0f, 40.0f, 20.0f, 40.0f},
+        },
+        Text(
+            {// Text node shrinks tightly to its characters
+             .size = {ui::SizeFit{}, ui::SizeFit{}},
+             .color = {0.9f, 0.9f, 0.95f, 1.0f},
+             .fontSize = 24, // Scaling test
+             .tracking = 2},
+            "Welcome back to our text component"));
 
-    rootStyle.flexDirection = ui::FlexDirection::Row;
-    rootStyle.padding = {30.0f, 30.0f, 30.0f, 30.0f};
-    rootStyle.gap = {25.0f, 0.0f};
-    rootDiv->GetStyle() = rootStyle;
-
-    auto leftBox = std::make_unique<ui::DivElement>();
-    ui::styleConfig leftStyle{};
-    leftStyle.size = {350.0f, 620.0f};
-    leftStyle.color = {0.18f, 0.48f, 0.90f, 1.0f}; // Cobalt Blue
-    leftBox->GetStyle() = leftStyle;
-
-    auto autoGrowingBox = std::make_unique<ui::DivElement>();
-    ui::styleConfig growStyle{};
-    growStyle.size = {400.0f, -1.0f};
-    growStyle.color = {0.22f, 0.24f, 0.26f, 1.0f};
-    growStyle.padding = {20.0f, 20.0f, 20.0f, 20.0f};
-    growStyle.gap = {0.0f, 15.0f};
-    growStyle.flexDirection = ui::FlexDirection::Column;
-    autoGrowingBox->GetStyle() = growStyle;
-
-    auto innerBoxA = std::make_unique<ui::DivElement>();
-    ui::styleConfig innerA{};
-    innerA.size = {360.0f, 100.0f};
-    innerA.color = {0.85f, 0.35f, 0.25f, 1.0f};
-    innerBoxA->GetStyle() = innerA;
-
-    auto innerBoxB = std::make_unique<ui::DivElement>();
-    ui::styleConfig innerB{};
-    innerB.size = {360.0f, 150.0f};
-    innerB.color = {0.30f, 0.65f, 0.40f, 1.0f};
-    innerBoxB->GetStyle() = innerB;
-
-    autoGrowingBox->AddChild(std::move(innerBoxA));
-    autoGrowingBox->AddChild(std::move(innerBoxB));
-
-    rootDiv->AddChild(std::move(leftBox));
-    rootDiv->AddChild(std::move(autoGrowingBox));
-
-    window->SetRootNode(std::move(rootDiv));
+    window->SetRootNode(std::move(rootdiv));
 
     while (!window->should_close()) {
       window->poll_events();
@@ -64,5 +41,4 @@ int main() {
     std::cerr << "Engine Crash: " << e.what() << std::endl;
     return EXIT_FAILURE;
   }
-  return EXIT_SUCCESS;
 }

@@ -6,6 +6,7 @@
 #include <vector>
 
 namespace ui::font {
+
 class TextLayoutEngine {
 public:
   static std::vector<TextRun> parseRichText(const std::string &rawText,
@@ -15,6 +16,51 @@ public:
     runs.push_back({rawText, defaultSize,
                     static_cast<uint8_t>(TextStyleBit::Regular), defaultColor});
     return runs;
+  }
+  static math::vec2<float> measureString(const std::string &text,
+                                         Font *fontBackend, uint32_t fontSize,
+                                         float maxWidth, float tracking,
+                                         float lineSpacingScale = 1.0f) {
+    if (!fontBackend || text.empty()) {
+      return {0.0f, 0.0f};
+    }
+
+    float cursorX = 0.0f;
+    float cursorY = 0.0f;
+    float maxLineWidth = 0.0f;
+
+    float lineHeight = fontBackend->getLineHeight() * lineSpacingScale;
+
+    // Initial height is at least one line if text exists
+    float currentHeight = lineHeight;
+
+    for (size_t i = 0; i < text.size(); ++i) {
+      char c = text[i];
+
+      if (c == '\n') {
+        maxLineWidth = std::max(maxLineWidth, cursorX);
+        cursorX = 0.0f;
+        cursorY += lineHeight;
+        currentHeight = std::max(currentHeight, cursorY + lineHeight);
+        continue;
+      }
+
+      // We pass styleFlags = 0 (Regular Style) for generic measurements
+      GlyphInfo glyphinfo = fontBackend->getGlyphVariant(c, fontSize, 0);
+
+      // Simple word wrapping boundary test
+      if (maxWidth > 0.0f && (cursorX + glyphinfo.advanceX) > maxWidth) {
+        maxLineWidth = std::max(maxLineWidth, cursorX);
+        cursorX = 0.0f;
+        cursorY += lineHeight;
+        currentHeight = std::max(currentHeight, cursorY + lineHeight);
+      }
+
+      cursorX += glyphinfo.advanceX + tracking;
+    }
+
+    maxLineWidth = std::max(maxLineWidth, cursorX);
+    return {maxLineWidth, currentHeight};
   }
 
   static std::vector<PositionedGlyph>

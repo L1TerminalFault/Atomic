@@ -9,7 +9,16 @@ namespace ui {
 
 class DivElement : public IElement {
 public:
-  DivElement() = default;
+  DivElement(const styleConfig &cfg,
+             std::vector<std::unique_ptr<IElement>> &&initChildren)
+      : m_style(cfg) {
+    m_children.reserve(initChildren.size());
+
+    for (auto &child : initChildren) {
+      child->SetParent(this);
+      m_children.push_back(std::move(child));
+    }
+  };
   ~DivElement() override = default;
 
   ElementType GetType() const override { return ElementType::DIV; }
@@ -39,4 +48,23 @@ private:
   IElement *m_parent = nullptr;
   std::vector<std::unique_ptr<IElement>> m_children;
 };
+
+inline std::unique_ptr<IElement>
+Div(const styleConfig &cfg,
+    std::vector<std::unique_ptr<IElement>> &&children = {}) {
+  return std::make_unique<DivElement>(cfg, std::move(children));
+}
+
+template <typename... Args>
+inline std::unique_ptr<IElement> Div(const styleConfig &cfg,
+                                     Args &&...children) {
+  std::vector<std::unique_ptr<IElement>> vec;
+  vec.reserve(sizeof...(children));
+
+  // Fold expression to move each child into the vector sequentially
+  (vec.push_back(std::forward<Args>(children)), ...);
+
+  return std::make_unique<DivElement>(cfg, std::move(vec));
+}
+
 } // namespace ui

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
@@ -197,6 +198,11 @@ void VulkanRenderer::init_vulkan() {
 
   vkGetDeviceQueue(m_device, m_graphicsSupportingQueueFamilyIndex, 0,
                    &m_graphicsQueue);
+  // load default font
+  // TODO: find a better place for this
+  auto default_font = std::make_unique<ui::font::FreeTypeFont>();
+  default_font->load("inter.ttf", 18);
+  set_default_font(std::move(default_font));
 }
 
 static VkSurfaceFormatKHR chooseSwapSurfaceFormat(
@@ -626,7 +632,8 @@ void VulkanRenderer::render_batch() {
   bool fontAtlasChanged = false;
 
   if (m_default_font) {
-    auto *concreteFont = static_cast<ui::font::FreeTypeFont *>(m_default_font);
+    auto *concreteFont =
+        static_cast<ui::font::FreeTypeFont *>(m_default_font.get());
 
     if (concreteFont->consumeTextureDirtyBit()) {
       const uint8_t *pixels = concreteFont->getRawPixels();

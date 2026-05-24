@@ -18,6 +18,7 @@ template <typename T> struct vec2 {
     lhs += rhs;
     return lhs;
   }
+  static vec2 all(T single) { return {single, single}; }
 
   operator VkExtent2D() const {
     return {static_cast<uint32_t>(x), static_cast<uint32_t>(y)};
@@ -32,5 +33,7 @@ template <typename T> struct vec4 {
     return {static_cast<U>(x), static_cast<U>(y), static_cast<U>(z),
             static_cast<U>(w)};
   }
+
+  static vec4 all(T single) { return {single, single, single, single}; }
 };
 } // namespace math

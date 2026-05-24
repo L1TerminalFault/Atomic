@@ -23,6 +23,7 @@ public:
                          const math::vec2<float> &computedSize,
                          const std::string &path,
                          const ui::styleConfig *style) = 0;
+  virtual ui::font::Font *get_default_font() = 0;
   virtual void render_batch() = 0;
 
   static std::unique_ptr<Renderer> Create(class Window *window);

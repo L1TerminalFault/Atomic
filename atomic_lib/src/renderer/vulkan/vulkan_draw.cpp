@@ -3,6 +3,8 @@
 #include "renderer/style.hpp"
 #include "renderer/vulkan/vulkan_renderer.hpp"
 #include <cstdint>
+#include <cstdio>
+#include <iostream>
 #include <vector>
 #include <vulkan/vulkan_core.h>
 
@@ -43,8 +45,20 @@ void VulkanRenderer::add_circle(const math::vec2<float> &globalPosition,
 void VulkanRenderer::add_text(const math::vec2<float> &globalPosition,
                               const std::string &text,
                               const ui::styleConfig *style) {
-  if (!style || !style->font)
+  if (!style) {
+    printf("no font so not rendering");
     return;
+  }
+  ui::font::Font *activeFont = style->font
+                                   ? static_cast<ui::font::Font *>(style->font)
+                                   : m_default_font.get();
+
+  if (!activeFont) {
+    std::cerr << "Renderer Warning: Dropping text draw call due to missing "
+                 "Font asset."
+              << std::endl;
+    return;
+  }
 
   std::vector<font::TextRun> runs = font::TextLayoutEngine::parseRichText(
       text, style->fontSize, style->color);
@@ -54,15 +68,17 @@ void VulkanRenderer::add_text(const math::vec2<float> &globalPosition,
   }
 
   std::vector<ui::font::PositionedGlyph> positionedGlyphs =
-      font::TextLayoutEngine::calcLayout(
-          runs, static_cast<ui::font::Font *>(style->font), style->maxWidth,
-          style->tracking);
+      font::TextLayoutEngine::calcLayout(runs, activeFont, style->maxWidth,
+                                         style->tracking);
+
+  float fontAscender = activeFont->getAscender();
 
   for (const auto &pg : positionedGlyphs) {
     UIInstance instance{};
     // Apply local glyph offsets relative to the parent element's global layout
     // position
-    instance.pos = {globalPosition.x + pg.rect.x, globalPosition.y + pg.rect.y};
+    instance.pos = {globalPosition.x + pg.rect.x,
+                    globalPosition.y + fontAscender + pg.rect.y};
     instance.size = {pg.rect.z, pg.rect.w};
     instance.color = pg.color;
 

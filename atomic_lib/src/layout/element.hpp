@@ -2,6 +2,7 @@
 #include "math/vec.hpp"
 #include "renderer/style.hpp"
 #include <memory>
+#include <variant>
 #include <vector>
 
 namespace ui {

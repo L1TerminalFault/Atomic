@@ -57,8 +57,7 @@ void SDLWindow::render() {
   if (m_rootNode) {
     math::vec2<float> surfaceDimensions{static_cast<float>(m_width),
                                         static_cast<float>(m_height)};
-    m_layoutEngine->ProcessLayout(m_rootNode.get(), surfaceDimensions,
-                                  m_renderer->get_default_font());
+    m_layoutEngine->ProcessLayout(m_rootNode.get(), surfaceDimensions);
   }
 
   m_renderer->begin_frame();

@@ -3,6 +3,7 @@
 #include "math/vec.hpp"
 #include "renderer/font/interface.hpp"
 #include <cstdint>
+#include <variant>
 
 namespace ui {
 
@@ -15,10 +16,23 @@ enum class ShapeType : uint32_t {
 
 enum class FlexDirection : uint32_t { Column = 0, Row = 1 };
 
+struct SizeFit {};
+struct SizeFill {};
+
+using Size = std::variant<float, SizeFit, SizeFill>;
+
+inline constexpr SizeFit fit{};
+inline constexpr SizeFill fill{};
+
+struct Size2D {
+  Size x = fit;
+  Size y = fit;
+};
+
 struct styleConfig {
   math::vec2<float> pos;
-  math::vec2<float> size;
-  math::vec4<float> color;
+  Size2D size;
+  math::vec4<float> color = math::vec4<float>::all(1);
   math::vec4<float> radius;
   ShapeType shape = ShapeType::RoundedRect;
 
