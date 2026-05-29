@@ -19,25 +19,6 @@ struct UIPushConstants {
   math::vec2<float> resolution;
 };
 
-// struct UIInstance {
-//   alignas(8) math::vec2<float> pos;
-//   alignas(8) math::vec2<float> size;
-//   alignas(16) math::vec4<float> color;
-//   alignas(16) math::vec4<float> radius;
-//   alignas(4) uint32_t shapeType;
-//
-//   alignas(4) float strokeWidth;
-//   alignas(4) uint32_t strokePosition;
-//   alignas(4) float dotGap;
-//   alignas(4) float dotSize;
-//
-//   alignas(4) uint32_t textureIndex;
-//
-//   alignas(8) math::vec2<float> uvMin;
-//   alignas(8) math::vec2<float> uvMax;
-//   alignas(16) math::vec4<float> strokeColor;
-// };
-
 struct GradientStopGPU {
   alignas(16) math::vec4<float> color;
   alignas(4) float position;
